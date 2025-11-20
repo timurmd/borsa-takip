@@ -5,40 +5,41 @@ from datetime import datetime
 import os
 import warnings
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials # Yeni modern kütüphane
 
 # Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v17")
+st.set_page_config(layout="wide", page_title="Portfoy v18")
 DATA_FILE = "portfolio_transactions.csv"
-SHEET_NAME = "BorsaPortfoy" # Google Sheets'teki adınızla AYNI OLMALI
+SHEET_NAME = "BorsaPortfoy"
 JSON_FILE = "service_account.json"
 
-# --- GOOGLE SHEETS BAĞLANTISI (Tamirci Modu) ---
+# --- GOOGLE SHEETS BAĞLANTISI (MODERN) ---
 @st.cache_resource
 def init_connection():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
     
-    # 1. Durum: Bilgisayarınızda (service_account.json var mı?)
+    # 1. Durum: Bilgisayarınızda (Dosya var mı?)
     if os.path.exists(JSON_FILE):
-        creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
+        creds = Credentials.from_service_account_file(JSON_FILE, scopes=scopes)
     else:
-        # 2. Durum: Streamlit Cloud'da (Secrets kullan)
+        # 2. Durum: Streamlit Cloud (Secrets kullan)
         try:
-            # Secrets verisini normal sözlüğe çevir
-            creds_dict = dict(st.secrets["gcp_service_account"])
+            # Secrets verisini al
+            info = dict(st.secrets["gcp_service_account"])
             
-            # --- KRİTİK DÜZELTME BURADA ---
-            # Private Key içindeki \n karakterleri bozulduysa düzeltiyoruz
-            if "private_key" in creds_dict:
-                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            # ------------------------------
+            # Private Key içindeki \n karakterlerini düzelt (Her ihtimale karşı)
+            if "private_key" in info:
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
             
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
         except Exception as e:
-            st.error(f"Bağlantı Hatası Detayı: {e}")
+            st.error(f"Bağlantı Hatası: {e}")
             st.stop()
             
     client = gspread.authorize(creds)
@@ -52,10 +53,9 @@ def get_data():
         data = sheet.get_all_records()
         return pd.DataFrame(data)
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"'{SHEET_NAME}' adında bir tablo bulunamadı! Google Sheets adını kontrol edin.")
+        st.error(f"'{SHEET_NAME}' tablosu bulunamadı! Google Sheets adını kontrol edin.")
         st.stop()
     except Exception as e:
-        # Eğer tablo boşsa veya başka hata varsa boş dön
         return pd.DataFrame()
 
 # Veri Kaydetme
@@ -63,7 +63,6 @@ def save_transaction(yeni_veri):
     client = init_connection()
     sheet = client.open(SHEET_NAME).worksheet("Islemler")
     
-    # Satır hazırla
     row = [
         yeni_veri["Tarih"], yeni_veri["Tur"], yeni_veri["Islem"], 
         yeni_veri["Sembol"], yeni_veri["Adet"], yeni_veri["Fiyat"], 
@@ -91,7 +90,7 @@ def get_fund_prices_from_sheet():
     except:
         return {}
 
-# --- DİĞER FONKSİYONLAR ---
+# --- YARDIMCI FONKSİYONLAR ---
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
     try:
@@ -111,11 +110,10 @@ def renk(val):
 # --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy")
 
-# Verileri Getir
 try:
     df = get_data()
-except Exception as e:
-    st.error("Hata oluştu.")
+except:
+    st.error("Bağlantı kurulamadı.")
     st.stop()
 
 tab1, tab2, tab3 = st.tabs(["➕ İŞLEM EKLE", "📊 PORTFÖY", "📋 GEÇMİŞ"])
@@ -148,7 +146,7 @@ with tab1:
                     "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam
                 }
                 
-                with st.spinner("Buluta kaydediliyor..."):
+                with st.spinner("Kaydediliyor..."):
                     save_transaction(yeni)
                     st.success("Kaydedildi!")
                     st.cache_data.clear()
@@ -233,7 +231,7 @@ with tab2:
             net_y = (net_k/top_m)*100 if top_m > 0 else 0
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Varlık", f"{top_v:,.2f}"); c2.metric("Maliyet", f"{top_m:,.2f}")
-            c3.metric("Net K/Z", f"{net_k:+,.2f}"); c4.metric("Getiri", f"%{net_y:+.2f}")
+            c3.metric("Net K/Z", f"{net_k:+,.2f}"); k4.metric("Getiri", f"%{net_y:+.2f}")
 
 # --- TAB 3 ---
 with tab3:
