@@ -11,23 +11,39 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v22")
+st.set_page_config(layout="wide", page_title="Portfoy v23")
 
-# 👇👇👇 BURAYI DOLDURUN (Tırnakların arasına ID yapıştırın) 👇👇👇
+# 👇👇👇 BURAYI DOLDURMAYI UNUTMAYIN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
-# 👆👆👆 -------------------------------------------------- 👆👆👆
+# 👆👆👆 --------------------------------- 👆👆👆
 
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
 
-# --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
+# --- KRİTİK DÜZELTME: SAF SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
+    """Ne gelirse gelsin (Virgüllü string, noktalı string, int) float'a çevirir"""
     if val is None or val == "":
         return 0.0
+    
+    # Zaten sayıysa direkt döndür
     if isinstance(val, (int, float)):
         return float(val)
+    
+    # String (Yazı) ise temizlik yap
+    val_str = str(val).strip()
+    
+    # Eğer hem nokta hem virgül varsa (Örn: 1.234,56)
+    # Noktaları (binlik ayraçlarını) sil, virgülü nokta yap
+    if "." in val_str and "," in val_str:
+        val_str = val_str.replace(".", "") # Noktayı sil
+        val_str = val_str.replace(",", ".") # Virgülü nokta yap
+    
+    # Sadece virgül varsa (Örn: 77,32) -> (77.32) yap
+    elif "," in val_str:
+        val_str = val_str.replace(",", ".")
+        
     try:
-        val_str = str(val).strip().replace(",", ".")
         return float(val_str)
     except:
         return 0.0
@@ -57,11 +73,23 @@ def get_data():
     client = init_connection()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
-        df = pd.DataFrame(sheet.get_all_records())
+        
+        # ÖNEMLİ DEĞİŞİKLİK: get_all_records() YERİNE get_all_values()
+        # Bu sayede Google'ın sayı tahminlerini devre dışı bırakıp ham veriyi alıyoruz
+        raw_data = sheet.get_all_values()
+        
+        # İlk satır başlıktır
+        header = raw_data[0]
+        rows = raw_data[1:]
+        
+        df = pd.DataFrame(rows, columns=header)
+        
+        # Sayısal sütunları zorla düzelt
         cols = ["Adet", "Fiyat", "Komisyon", "Toplam"]
         for c in cols:
             if c in df.columns:
                 df[c] = df[c].apply(safe_float)
+                
         return df
     except Exception as e:
         st.error(f"Bağlantı Hatası: {e}")
@@ -71,10 +99,16 @@ def save_transaction(veri):
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     
+    # Kaydederken Google Sheets'in anlayacağı formata (Virgüllü string) çevirip gönderelim
+    # Böylece Sheets'te de güzel görünür
+    fiyat_str = str(veri["Fiyat"]).replace(".", ",")
+    kom_str = str(veri["Komisyon"]).replace(".", ",")
+    top_str = str(veri["Toplam"]).replace(".", ",")
+    
     row = [
         veri["Tarih"], veri["Tur"], veri["Islem"], 
         veri["Sembol"], veri["Adet"], 
-        float(veri["Fiyat"]), float(veri["Komisyon"]), float(veri["Toplam"])
+        fiyat_str, kom_str, top_str
     ]
     sheet.append_row(row)
     
@@ -134,12 +168,12 @@ with tab1:
         
         cc, cd, ce = st.columns(3)
         adet = cc.number_input("Adet", min_value=1, step=1)
+        
         fiyat = cd.number_input("Fiyat", min_value=0.0, format="%.6f")
         kom = ce.number_input("Komisyon", min_value=0.0, format="%.2f")
         
         if st.form_submit_button("KAYDET"):
             if kod and fiyat > 0:
-                # Hesaplama
                 tutar = adet * fiyat
                 toplam = 0.0
                 if yon == "Alış":
@@ -147,20 +181,15 @@ with tab1:
                 else:
                     toplam = tutar - kom
                 
-                # --- YENİ YAPI: SATIR SATIR TANIMLAMA (HATA VERMEZ) ---
                 yeni = {}
                 yeni["Tarih"] = tarih.strftime("%Y-%m-%d")
-                if tur == "Hisse Senedi":
-                    yeni["Tur"] = "Hisse"
-                else:
-                    yeni["Tur"] = "Fon"
+                yeni["Tur"] = "Hisse" if tur == "Hisse Senedi" else "Fon"
                 yeni["Islem"] = yon
                 yeni["Sembol"] = kod
                 yeni["Adet"] = adet
                 yeni["Fiyat"] = fiyat
                 yeni["Komisyon"] = kom
                 yeni["Toplam"] = toplam
-                # ------------------------------------------------------
                 
                 with st.spinner("Kaydediliyor..."):
                     save_transaction(yeni)
@@ -206,7 +235,6 @@ with tab2:
                         guncel = om
                         notlar = "⚠️"
                 
-                # Liste Ekleme (Satır satır)
                 item = {}
                 item["Sembol"] = s
                 item["Tur"] = v_tur
@@ -218,8 +246,6 @@ with tab2:
         
         if liste:
             df_v = pd.DataFrame(liste)
-            
-            # Ayarlar (Sözlük yapısı)
             cfg = {}
             cfg["Sembol"] = st.column_config.TextColumn("Varlık", disabled=True)
             cfg["Not"] = st.column_config.TextColumn("D", disabled=True)
@@ -247,7 +273,6 @@ with tab2:
                 tv += pd_val
                 tm += md_val
                 
-                # Sonuç listesi (Satır satır)
                 satir = {}
                 satir["Varlık"] = r["Sembol"]
                 satir["Toplam Maliyet"] = md_val
@@ -279,4 +304,13 @@ with tab2:
 
 # --- TAB 3 ---
 with tab3:
-    st.dataframe(df, use_container_width=True)
+    # Geçmiş Tablosunu da Formatlı Göster
+    st.dataframe(
+        df.sort_index(ascending=False).style.format({
+            "Fiyat": "{:,.4f}",
+            "Toplam": "{:,.2f}",
+            "Komisyon": "{:,.2f}",
+            "Adet": "{:.0f}"
+        }), 
+        use_container_width=True
+    )
