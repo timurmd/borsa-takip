@@ -4,3 +4,4 @@ yfinance
 openpyxl
 gspread
 google-auth
+plotly
