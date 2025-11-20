@@ -11,14 +11,31 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v19 (ID)")
+st.set_page_config(layout="wide", page_title="Portfoy v20")
 
-# 👇👇👇 BURAYI DOLDURUN (Google Sheets linkindeki o uzun kod) 👇👇👇
+# 👇👇👇 BURAYI DOLDURMAYI UNUTMAYIN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew" 
-# 👆👆👆 Örn: "1sH8x...k9Lp" gibi tırnak içine yapıştırın 👆👆👆
+# 👆👆👆 --------------------------------- 👆👆👆
 
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
+
+# --- AKILLI SAYI DÖNÜŞTÜRÜCÜ (YENİ) ---
+def safe_float(val):
+    """Virgüllü veya noktalı sayıyı Python formatına çevirir"""
+    if val is None or val == "":
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    
+    # String ise temizle
+    val_str = str(val).strip()
+    # Virgülü noktaya çevir
+    val_str = val_str.replace(",", ".")
+    try:
+        return float(val_str)
+    except:
+        return 0.0
 
 # --- GOOGLE SHEETS BAĞLANTISI ---
 @st.cache_resource
@@ -43,17 +60,23 @@ def init_connection():
     client = gspread.authorize(creds)
     return client
 
-# Veri Çekme (ID Kullanarak)
+# Veri Çekme
 def get_data():
     client = init_connection()
     try:
-        # open_by_key fonksiyonu en garanti yoldur
         sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
         data = sheet.get_all_records()
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+        
+        # Verileri çekerken sayıları düzeltelim
+        cols_to_fix = ["Adet", "Fiyat", "Komisyon", "Toplam"]
+        for col in cols_to_fix:
+            if col in df.columns:
+                df[col] = df[col].apply(safe_float)
+                
+        return df
     except Exception as e:
-        st.error(f"Google Sheets Bağlantı Hatası: {e}")
-        st.error("Lütfen SHEET_ID'yi doğru girdiğinizden ve robot e-postasını paylaştığınızdan emin olun.")
+        st.error(f"Bağlantı Hatası: {e}")
         st.stop()
 
 # Veri Kaydetme
@@ -61,10 +84,15 @@ def save_transaction(yeni_veri):
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     
+    # Kaydederken de string olarak gönderip Google'ın anlamasını sağlayalım
+    # Google Sheets'e sayı gönderirken bazen float yerine string (noktalı) göndermek daha güvenlidir
     row = [
         yeni_veri["Tarih"], yeni_veri["Tur"], yeni_veri["Islem"], 
-        yeni_veri["Sembol"], yeni_veri["Adet"], yeni_veri["Fiyat"], 
-        yeni_veri["Komisyon"], yeni_veri["Toplam"]
+        yeni_veri["Sembol"], 
+        yeni_veri["Adet"], 
+        float(yeni_veri["Fiyat"]), # Python float olarak gönder
+        float(yeni_veri["Komisyon"]), 
+        float(yeni_veri["Toplam"])
     ]
     sheet.append_row(row)
     
@@ -82,7 +110,8 @@ def get_fund_prices_from_sheet():
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
         data = sheet.get_all_records()
-        fiyat_dict = {str(row["Sembol"]): float(row["Fiyat"]) for row in data if str(row["Fiyat"]).replace('.','',1).isdigit()}
+        # Fiyatları çekerken de safe_float kullanalım
+        fiyat_dict = {str(row["Sembol"]): safe_float(row["Fiyat"]) for row in data}
         return fiyat_dict
     except:
         return {}
@@ -128,107 +157,4 @@ with tab1:
         c3, c4, c5 = st.columns(3)
         adet = c3.number_input("Adet", min_value=1, step=1)
         fiyat = c4.number_input("Fiyat", min_value=0.0, format="%.6f")
-        kom = c5.number_input("Komisyon", min_value=0.0, format="%.2f")
-        
-        if st.form_submit_button("KAYDET"):
-            if kod and fiyat > 0:
-                tutar = adet * fiyat
-                toplam = tutar + kom if yon == "Alış" else tutar - kom
-                
-                yeni = {
-                    "Tarih": tarih.strftime("%Y-%m-%d"),
-                    "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
-                    "Islem": yon, "Sembol": kod, "Adet": adet,
-                    "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam
-                }
-                
-                with st.spinner("Buluta yazılıyor..."):
-                    save_transaction(yeni)
-                    st.success("Kaydedildi!")
-                    st.cache_data.clear()
-                    st.rerun()
-
-# --- TAB 2 ---
-with tab2:
-    if st.button("🔄 Yenile"):
-        st.cache_data.clear()
-        st.rerun()
-
-    if df.empty:
-        st.info("İşlem yok.")
-    else:
-        sheet_fiyatlar = get_fund_prices_from_sheet()
-        semboller = df["Sembol"].unique()
-        liste = []
-        
-        for s in semboller:
-            txs = df[df["Sembol"] == s]
-            if txs.empty: continue
-            v_tur = txs.iloc[0]["Tur"]
-            
-            alis = txs[txs["Islem"] == "Alış"]
-            satis = txs[txs["Islem"] == "Satış"]
-            net_adet = alis["Adet"].sum() - satis["Adet"].sum()
-            
-            if net_adet > 0:
-                t_maliyet = (alis["Adet"] * alis["Fiyat"]).sum() + alis["Komisyon"].sum()
-                ort_maliyet = t_maliyet / alis["Adet"].sum()
-                eldeki_mal = ort_maliyet * net_adet
-                
-                guncel = 0.0
-                notlar = ""
-                
-                if v_tur == "Hisse":
-                    guncel = get_stock_price(s)
-                else:
-                    guncel = float(sheet_fiyatlar.get(s, 0))
-                    if guncel == 0:
-                         guncel = ort_maliyet
-                         notlar = "⚠️ Bekleniyor"
-                
-                liste.append({
-                    "Sembol": s, "Tur": v_tur, "Adet": net_adet,
-                    "Not": notlar,
-                    "Toplam Maliyet": float(eldeki_mal),
-                    "Güncel Fiyat": float(guncel)
-                })
-        
-        if liste:
-            df_view = pd.DataFrame(liste)
-            cfg = {
-                "Sembol": st.column_config.TextColumn("Varlık", disabled=True),
-                "Not": st.column_config.TextColumn("Durum", disabled=True),
-                "Güncel Fiyat": st.column_config.NumberColumn("Fiyat", format="%.4f"),
-                "Toplam Maliyet": st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True),
-                "Tur": None, "Adet": None
-            }
-            
-            edited = st.data_editor(df_view, column_config=cfg, use_container_width=True, hide_index=True, key="gs_editor")
-            
-            res = []
-            top_v = 0; top_m = 0
-            for i, row in edited.iterrows():
-                p_deg = row["Adet"] * row["Güncel Fiyat"]
-                m_deg = row["Toplam Maliyet"]
-                kar_tl = p_deg - m_deg
-                kar_y = (kar_tl / m_deg)*100 if m_deg > 0 else 0
-                top_v += p_deg; top_m += m_deg
-                res.append({"Varlık": row["Sembol"], "Toplam Maliyet": m_deg, "Piyasa Değeri": p_deg, "K/Z (TL)": kar_tl, "K/Z (%)": kar_y})
-            
-            st.markdown("### 📊 Durum")
-            st_df = pd.DataFrame(res).style.format({
-                "Toplam Maliyet": "{:,.2f}", "Piyasa Değeri": "{:,.2f}",
-                "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
-            }).map(renk, subset=["K/Z (TL)", "K/Z (%)"])
-            st.dataframe(st_df, use_container_width=True, hide_index=True)
-            
-            st.divider()
-            net_k = top_v - top_m
-            net_y = (net_k/top_m)*100 if top_m > 0 else 0
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Varlık", f"{top_v:,.2f}"); c2.metric("Maliyet", f"{top_m:,.2f}")
-            c3.metric("Net K/Z", f"{net_k:+,.2f}"); c4.metric("Getiri", f"%{net_y:+.2f}")
-
-# --- TAB 3 ---
-with tab3:
-    st.dataframe(df, use_container_width=True)
+        kom = c5.number_input("Komisyon", min_value=0.
