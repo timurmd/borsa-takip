@@ -5,18 +5,22 @@ from datetime import datetime
 import os
 import warnings
 import gspread
-from google.oauth2.service_account import Credentials # Yeni modern kütüphane
+from google.oauth2.service_account import Credentials
 
 # Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v18")
+st.set_page_config(layout="wide", page_title="Portfoy v19 (ID)")
+
+# 👇👇👇 BURAYI DOLDURUN (Google Sheets linkindeki o uzun kod) 👇👇👇
+SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew" 
+# 👆👆👆 Örn: "1sH8x...k9Lp" gibi tırnak içine yapıştırın 👆👆👆
+
 DATA_FILE = "portfolio_transactions.csv"
-SHEET_NAME = "BorsaPortfoy"
 JSON_FILE = "service_account.json"
 
-# --- GOOGLE SHEETS BAĞLANTISI (MODERN) ---
+# --- GOOGLE SHEETS BAĞLANTISI ---
 @st.cache_resource
 def init_connection():
     scopes = [
@@ -24,44 +28,38 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # 1. Durum: Bilgisayarınızda (Dosya var mı?)
     if os.path.exists(JSON_FILE):
         creds = Credentials.from_service_account_file(JSON_FILE, scopes=scopes)
     else:
-        # 2. Durum: Streamlit Cloud (Secrets kullan)
         try:
-            # Secrets verisini al
             info = dict(st.secrets["gcp_service_account"])
-            
-            # Private Key içindeki \n karakterlerini düzelt (Her ihtimale karşı)
             if "private_key" in info:
                 info["private_key"] = info["private_key"].replace("\\n", "\n")
-            
             creds = Credentials.from_service_account_info(info, scopes=scopes)
         except Exception as e:
-            st.error(f"Bağlantı Hatası: {e}")
+            st.error(f"Anahtar Hatası: {e}")
             st.stop()
             
     client = gspread.authorize(creds)
     return client
 
-# Veri Çekme
+# Veri Çekme (ID Kullanarak)
 def get_data():
     client = init_connection()
     try:
-        sheet = client.open(SHEET_NAME).worksheet("Islemler")
+        # open_by_key fonksiyonu en garanti yoldur
+        sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
         data = sheet.get_all_records()
         return pd.DataFrame(data)
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"'{SHEET_NAME}' tablosu bulunamadı! Google Sheets adını kontrol edin.")
-        st.stop()
     except Exception as e:
-        return pd.DataFrame()
+        st.error(f"Google Sheets Bağlantı Hatası: {e}")
+        st.error("Lütfen SHEET_ID'yi doğru girdiğinizden ve robot e-postasını paylaştığınızdan emin olun.")
+        st.stop()
 
 # Veri Kaydetme
 def save_transaction(yeni_veri):
     client = init_connection()
-    sheet = client.open(SHEET_NAME).worksheet("Islemler")
+    sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     
     row = [
         yeni_veri["Tarih"], yeni_veri["Tur"], yeni_veri["Islem"], 
@@ -70,27 +68,26 @@ def save_transaction(yeni_veri):
     ]
     sheet.append_row(row)
     
-    # Fiyatlar sayfasına sembol ekle
     try:
-        price_sheet = client.open(SHEET_NAME).worksheet("Fiyatlar")
+        price_sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
         existing = price_sheet.col_values(1)
         if yeni_veri["Sembol"] not in existing:
             price_sheet.append_row([yeni_veri["Sembol"], 0, ""])
     except:
         pass 
 
-# Fon Fiyatlarını Sheets'ten Al
+# Fon Fiyatlarını Al
 def get_fund_prices_from_sheet():
     client = init_connection()
     try:
-        sheet = client.open(SHEET_NAME).worksheet("Fiyatlar")
+        sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
         data = sheet.get_all_records()
         fiyat_dict = {str(row["Sembol"]): float(row["Fiyat"]) for row in data if str(row["Fiyat"]).replace('.','',1).isdigit()}
         return fiyat_dict
     except:
         return {}
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- DİĞER FONKSİYONLAR ---
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
     try:
@@ -113,7 +110,6 @@ st.title("☁️ Bulut Portföy")
 try:
     df = get_data()
 except:
-    st.error("Bağlantı kurulamadı.")
     st.stop()
 
 tab1, tab2, tab3 = st.tabs(["➕ İŞLEM EKLE", "📊 PORTFÖY", "📋 GEÇMİŞ"])
@@ -146,7 +142,7 @@ with tab1:
                     "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam
                 }
                 
-                with st.spinner("Kaydediliyor..."):
+                with st.spinner("Buluta yazılıyor..."):
                     save_transaction(yeni)
                     st.success("Kaydedildi!")
                     st.cache_data.clear()
@@ -231,7 +227,7 @@ with tab2:
             net_y = (net_k/top_m)*100 if top_m > 0 else 0
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Varlık", f"{top_v:,.2f}"); c2.metric("Maliyet", f"{top_m:,.2f}")
-            c3.metric("Net K/Z", f"{net_k:+,.2f}"); k4.metric("Getiri", f"%{net_y:+.2f}")
+            c3.metric("Net K/Z", f"{net_k:+,.2f}"); c4.metric("Getiri", f"%{net_y:+.2f}")
 
 # --- TAB 3 ---
 with tab3:
