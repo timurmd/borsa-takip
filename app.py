@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v24")
+st.set_page_config(layout="wide", page_title="Portfoy v25")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -23,17 +23,12 @@ JSON_FILE = "service_account.json"
 # --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
     if val is None or val == "": return 0.0
-    
-    # Stringe çevir ki virgülleri görebilelim
     val_str = str(val).strip()
-    
-    # Eğer "3.694.199" gibi gelirse noktaları sil (Binlik ayracı temizliği)
+    # 1.234.567,89 formatı için noktaları sil
     if "." in val_str and "," in val_str:
-        val_str = val_str.replace(".", "") 
-        
-    # Virgülü noktaya çevir (3,69 -> 3.69)
+        val_str = val_str.replace(".", "")
+    # Virgülü noktaya çevir
     val_str = val_str.replace(",", ".")
-    
     try:
         return float(val_str)
     except:
@@ -60,10 +55,7 @@ def get_data():
     client = init_connection()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
-        # get_all_values() kullanarak her şeyi yazı (string) olarak alıyoruz.
-        # Bu sayede Google'ın sayıları bozmasını engelliyoruz.
         raw_data = sheet.get_all_values()
-        
         if len(raw_data) < 2: return pd.DataFrame()
         
         header = raw_data[0]
@@ -82,7 +74,6 @@ def save_transaction(veri):
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     
-    # Google'a gönderirken virgüllü string yapalım
     row = [
         veri["Tarih"], veri["Tur"], veri["Islem"], 
         veri["Sembol"], veri["Adet"], 
@@ -103,20 +94,12 @@ def get_fund_prices():
     client = init_connection()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
-        
-        # --- DÜZELTME BURADA ---
-        # get_all_records yerine get_all_values kullanıyoruz.
-        # Böylece "3,69" verisi bozulmadan metin olarak geliyor.
         raw_data = sheet.get_all_values()
-        
-        # İlk satır başlık, atla
         fiyat_dict = {}
         for row in raw_data[1:]:
             if len(row) >= 2:
                 sembol = str(row[0])
-                fiyat_raw = row[1] # Bu artık "3,694199" (string)
-                fiyat_dict[sembol] = safe_float(fiyat_raw)
-                
+                fiyat_dict[sembol] = safe_float(row[1])
         return fiyat_dict
     except:
         return {}
@@ -255,15 +238,18 @@ with tab2:
             )
             
             res = []
-            tv = 0
-            tm = 0
+            # Anlık Durum Değişkenleri
+            top_v = 0
+            top_m = 0
+            
             for i, r in edited.iterrows():
                 pd_val = r["Adet"] * safe_float(r["Güncel Fiyat"])
                 md_val = safe_float(r["Toplam Maliyet"])
                 ktl = pd_val - md_val
                 ky = (ktl/md_val)*100 if md_val > 0 else 0
-                tv += pd_val
-                tm += md_val
+                
+                top_v += pd_val
+                top_m += md_val
                 
                 satir = {}
                 satir["Varlık"] = r["Sembol"]
@@ -273,7 +259,7 @@ with tab2:
                 satir["K/Z (%)"] = ky
                 res.append(satir)
             
-            st.markdown("### 📊 Durum")
+            st.markdown("### 📊 Portföy Detayı")
             rdf = pd.DataFrame(res)
             fmt = {
                 "Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}",
@@ -287,36 +273,46 @@ with tab2:
             
             st.divider()
             
-            # --- GELİŞMİŞ HESAPLAMA (ANA PARA TAKİBİ) ---
-            # 1. Toplam yatırdığımız para (Tüm Alışlar)
+            # --- GELİŞMİŞ ANA PARA HESABI ---
+            # 1. Tüm zamanlarda cepten çıkan toplam para (Alışlar)
             toplam_giren = df[df["Islem"] == "Alış"]["Toplam"].sum()
             
-            # 2. Cebimize geri giren para (Tüm Satışlar)
+            # 2. Cebe geri giren toplam para (Satışlar)
             toplam_cikan = df[df["Islem"] == "Satış"]["Toplam"].sum()
             
-            # 3. İçerideki Net Ana Para (Cebimizden çıkan net tutar)
-            # Örnek: 100k yatırdın, 150k çektin, 150k geri yatırdın -> Net içerideki para 100k kalır.
+            # 3. Net İçerideki Ana Para
             net_ana_para = toplam_giren - toplam_cikan
             
-            # 4. Toplam Genel Kar (Eldeki Varlık - Net Ana Para)
-            # Bu, satıp harcadığınız karları da hesaba katar.
-            genel_kar_tl = t_var - net_ana_para
+            # 4. Gerçekleşmiş + Gerçekleşmemiş Genel Kar
+            genel_kar_tl = top_v - net_ana_para
             
             genel_kar_yuzde = 0
             if net_ana_para > 0:
                 genel_kar_yuzde = (genel_kar_tl / net_ana_para) * 100
             
             # --- GÖSTERGE PANELİ ---
+            # 5 Kolonlu yapı
             k1, k2, k3, k4, k5 = st.columns(5)
             
-            k1.metric("Portföy Değeri", f"{t_var:,.2f}")
-            k2.metric("Anlık Maliyet", f"{t_mal:,.2f}", help="Sadece eldeki hisselerin maliyeti")
-            k3.metric("Anlık K/Z", f"{nk:+,.2f}", delta=f"%{ny:+.2f}", help="Sadece eldeki hisselerin karı")
+            k1.metric("Portföy Değeri", f"{top_v:,.2f}", help="Şu anki varlıklarınızın toplam değeri")
+            k2.metric("Mevcut Maliyet", f"{top_m:,.2f}", help="Sadece elinizde kalan hisselerin maliyeti")
             
-            # Yeni Eklenenler:
-            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Cebinizden çıkan toplam net para")
-            k5.metric("GENEL TOPLAM KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}", help="Geçmiş satışlar dahil toplam kar")
+            # Anlık Kar (Sadece eldekiler)
+            anlik_kar = top_v - top_m
+            k3.metric("Anlık K/Z", f"{anlik_kar:+,.2f}", delta=None)
+            
+            # Genel Durum
+            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Toplam yatırdığınız eksi çektiğiniz para")
+            k5.metric("GENEL TOPLAM KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}", help="Geçmiş karlar dahil toplam durum")
 
 # --- TAB 3 ---
 with tab3:
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(
+        df.sort_index(ascending=False).style.format({
+            "Fiyat": "{:,.4f}",
+            "Toplam": "{:,.2f}",
+            "Komisyon": "{:,.2f}",
+            "Adet": "{:.0f}"
+        }), 
+        use_container_width=True
+    )
