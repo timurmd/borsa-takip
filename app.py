@@ -6,12 +6,13 @@ import os
 import warnings
 import gspread
 from google.oauth2.service_account import Credentials
+import plotly.express as px # Grafik Kütüphanesi
 
 # Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v29")
+st.set_page_config(layout="wide", page_title="Portfoy v30")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -19,38 +20,6 @@ SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
-
-# ==========================================
-# 🔒 GÜVENLİK DUVARI (LOGIN EKRANI)
-# ==========================================
-def check_password():
-    """Şifre kontrolü yapar"""
-    def password_entered():
-        if st.session_state["password"] == st.secrets["app_password"]:
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Şifreyi hafızadan sil
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        # İlk açılışta şifre sor
-        st.text_input("Lütfen Şifre Giriniz", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        # Şifre yanlışsa tekrar sor
-        st.text_input("Lütfen Şifre Giriniz", type="password", on_change=password_entered, key="password")
-        st.error("😕 Şifre yanlış.")
-        return False
-    else:
-        # Şifre doğruysa devam et
-        return True
-
-if not check_password():
-    st.stop() # Şifre girilmediyse kodun geri kalanını çalıştırma!
-
-# ==========================================
-# 🔓 BURADAN SONRASI SADECE ŞİFRE BİLENE GÖRÜNÜR
-# ==========================================
 
 # --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
@@ -146,6 +115,14 @@ def get_stock_price(symbol):
     except:
         return 0.0
 
+@st.cache_data(ttl=3600) # Dolar kurunu 1 saat tut
+def get_usd_rate():
+    try:
+        # Yahoo Finance'dan Dolar/TL kuru
+        return yf.Ticker("USDTRY=X").fast_info['last_price']
+    except:
+        return 1.0 # Hata olursa bölme hatası olmasın
+
 def renk(val):
     c = 'white'
     if val > 0: c = '#2ecc71'
@@ -153,9 +130,26 @@ def renk(val):
     return f'color: {c}; font-weight: bold;'
 
 # --- ARAYÜZ ---
-st.title("☁️ Bulut Portföy")
-# Çıkış Yap Butonu (Sidebar'a eklenir)
-if st.sidebar.button("🔒 Çıkış Yap"):
+st.title("☁️ Bulut Portföy & Analiz")
+
+# GÜVENLİK
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.text_input("Şifre", type="password", key="password", on_change=password_entered)
+        return False
+    return st.session_state["password_correct"]
+
+def password_entered():
+    if st.session_state["password"] == st.secrets["app_password"]:
+        st.session_state["password_correct"] = True
+        del st.session_state["password"]
+    else:
+        st.session_state["password_correct"] = False
+
+if not check_password():
+    st.stop()
+
+if st.sidebar.button("🔒 Çıkış"):
     del st.session_state["password_correct"]
     st.rerun()
 
@@ -172,9 +166,7 @@ with tab1:
 
     with col_ekle:
         st.subheader("Yeni İşlem")
-        giris_yontemi = st.radio("Hesaplama Yöntemi:", 
-                                 ["Birim Fiyat ile (Klasik)", "Toplam Tutar ile (Stopaj/Net)"], 
-                                 horizontal=True)
+        giris_yontemi = st.radio("Yöntem:", ["Birim Fiyat", "Toplam Tutar (Net)"], horizontal=True)
         st.markdown("---")
 
         with st.form("ekle", clear_on_submit=True):
@@ -184,9 +176,9 @@ with tab1:
             
             ca, cb = st.columns(2)
             tarih = ca.date_input("Tarih", datetime.now())
-            kod = cb.text_input("Kod (Örn: TTE)").upper()
+            kod = cb.text_input("Kod").upper()
             
-            adet = st.number_input("Adet (Lot)", min_value=1, step=1)
+            adet = st.number_input("Adet", min_value=1, step=1)
             
             fiyat = 0.0
             kom = 0.0
@@ -194,31 +186,25 @@ with tab1:
             
             cc, cd = st.columns(2)
             
-            if giris_yontemi == "Birim Fiyat ile (Klasik)":
-                fiyat = cc.number_input("Birim Fiyat", min_value=0.0, format="%.6f")
+            if giris_yontemi == "Birim Fiyat":
+                fiyat = cc.number_input("Fiyat", min_value=0.0, format="%.6f")
                 kom = cd.number_input("Komisyon", min_value=0.0, format="%.2f")
             else:
-                toplam_girilen = cc.number_input("Hesaba Geçen NET Tutar", min_value=0.0, format="%.2f")
-                st.caption("Birim fiyat otomatik hesaplanacaktır.")
+                toplam_girilen = cc.number_input("Net Tutar", min_value=0.0, format="%.2f")
             
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
-                    if giris_yontemi == "Birim Fiyat ile (Klasik)":
+                    if giris_yontemi == "Birim Fiyat":
                         if fiyat > 0:
-                            raw_tutar = adet * fiyat
-                            if yon == "Alış": toplam = raw_tutar + kom
-                            else: toplam = raw_tutar - kom
-                        else:
-                            st.error("Fiyat giriniz.")
-                            st.stop()
+                            raw = adet * fiyat
+                            toplam = raw + kom if yon == "Alış" else raw - kom
+                        else: st.stop()
                     else:
                         if toplam_girilen > 0:
                             toplam = toplam_girilen
                             fiyat = toplam_girilen / adet
                             kom = 0
-                        else:
-                            st.error("Tutar giriniz.")
-                            st.stop()
+                        else: st.stop()
                     
                     yeni = {}
                     yeni["Tarih"] = tarih.strftime("%Y-%m-%d")
@@ -232,7 +218,7 @@ with tab1:
                     
                     with st.spinner("Kaydediliyor..."):
                         save_transaction(yeni)
-                        st.success("Tamamlandı!")
+                        st.success("Tamam!")
                         st.cache_data.clear()
                         st.rerun()
 
@@ -242,19 +228,15 @@ with tab1:
             df_sil = get_data()
             if not df_sil.empty:
                 st.dataframe(df_sil.tail(5)[["Sembol", "Islem", "Toplam"]], use_container_width=True)
-                secilen_index = st.selectbox("Silinecek Satır (Index):", df_sil.index.sort_values(ascending=False))
-                
-                if st.button("Seçili Satırı Sil"):
+                secilen = st.selectbox("Sil ID:", df_sil.index.sort_values(ascending=False))
+                if st.button("Sil"):
                     client = init_connection()
                     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
-                    sheet.delete_rows(int(secilen_index) + 2)
+                    sheet.delete_rows(int(secilen) + 2)
                     st.success("Silindi!")
                     st.cache_data.clear()
                     st.rerun()
-            else:
-                st.info("Kayıt yok.")
-        except:
-            st.error("Silme listesi yüklenemedi.")
+        except: pass
 
 # --- TAB 2 ---
 with tab2:
@@ -266,6 +248,8 @@ with tab2:
         st.info("Veri yok.")
     else:
         sheet_fiyat = get_fund_prices()
+        dolar_kuru = get_usd_rate() # Dolar kurunu çek
+        
         semboller = df["Sembol"].unique()
         liste = []
         
@@ -285,7 +269,6 @@ with tab2:
                 
                 guncel = 0.0
                 notlar = ""
-                
                 if v_tur == "Hisse":
                     guncel = get_stock_price(s)
                 else:
@@ -301,18 +284,36 @@ with tab2:
                 item["Not"] = notlar
                 item["Toplam Maliyet"] = float(em)
                 item["Güncel Fiyat"] = float(guncel)
+                item["Piyasa Değeri"] = float(net * guncel) # Grafik için gerekli
                 liste.append(item)
         
         if liste:
             df_v = pd.DataFrame(liste)
             
+            # --- GRAFİK BÖLÜMÜ ---
+            col_grafik1, col_grafik2 = st.columns(2)
+            
+            with col_grafik1:
+                st.subheader("Varlık Dağılımı (Pasta)")
+                # Pasta Grafik
+                fig1 = px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4)
+                st.plotly_chart(fig1, use_container_width=True)
+            
+            with col_grafik2:
+                st.subheader("Büyüklük Haritası (Treemap)")
+                # Treemap (İç içe kutular)
+                fig2 = px.treemap(df_v, path=['Tur', 'Sembol'], values='Piyasa Değeri')
+                st.plotly_chart(fig2, use_container_width=True)
+            
+            # --- TABLO ---
             cfg = {}
             cfg["Sembol"] = st.column_config.TextColumn("Varlık", disabled=True)
             cfg["Adet"] = st.column_config.NumberColumn("Adet", format="%.0f", disabled=True)
             cfg["Güncel Fiyat"] = st.column_config.NumberColumn("Fiyat", format="%.4f")
             cfg["Toplam Maliyet"] = st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True)
             cfg["Tur"] = None
-            cfg["Not"] = None 
+            cfg["Not"] = None
+            cfg["Piyasa Değeri"] = None # Tabloda gösterme, grafikte kullandık
             
             edited = st.data_editor(
                 df_v, 
@@ -323,15 +324,13 @@ with tab2:
             )
             
             res = []
-            tv = 0
-            tm = 0
+            tv = 0; tm = 0
             for i, r in edited.iterrows():
                 pd_val = r["Adet"] * safe_float(r["Güncel Fiyat"])
                 md_val = safe_float(r["Toplam Maliyet"])
                 ktl = pd_val - md_val
                 ky = (ktl/md_val)*100 if md_val > 0 else 0
-                tv += pd_val
-                tm += md_val
+                tv += pd_val; tm += md_val
                 
                 satir = {}
                 satir["Varlık"] = r["Sembol"]
@@ -341,45 +340,44 @@ with tab2:
                 satir["K/Z (%)"] = ky
                 res.append(satir)
             
-            st.markdown("### 📊 Portföy Detayı")
-            rdf = pd.DataFrame(res)
-            fmt = {
-                "Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}",
-                "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
-            }
+            st.divider()
+            st.caption("Detaylı Tablo")
             st.dataframe(
-                rdf.style.format(fmt).map(renk, subset=["K/Z (TL)", "K/Z (%)"]),
-                use_container_width=True,
-                hide_index=True
+                pd.DataFrame(res).style.format({
+                    "Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}",
+                    "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
+                }).map(renk, subset=["K/Z (TL)", "K/Z (%)"]),
+                use_container_width=True, hide_index=True
             )
             
             st.divider()
             
+            # Hesaplamalar
             df_alis = df[df["Islem"] == "Alış"]
             df_satis = df[df["Islem"] == "Satış"]
-            toplam_giren = df_alis["Toplam"].sum()
-            toplam_cikan = df_satis["Toplam"].sum()
-            net_ana_para = toplam_giren - toplam_cikan
-            genel_kar_tl = tv - net_ana_para
-            genel_kar_yuzde = 0
-            if net_ana_para > 0:
-                genel_kar_yuzde = (genel_kar_tl / net_ana_para) * 100
+            giren = df_alis["Toplam"].sum()
+            cikan = df_satis["Toplam"].sum()
+            net_ana = giren - cikan
+            genel_kar = tv - net_ana
+            genel_yuzde = (genel_kar / net_ana) * 100 if net_ana > 0 else 0
             
-            k1, k2, k3, k4, k5 = st.columns(5)
-            k1.metric("Portföy", f"{tv:,.2f}")
-            k2.metric("Maliyet", f"{tm:,.2f}", help="Eldeki hisselerin maliyeti")
-            k3.metric("Anlık K/Z", f"{tv-tm:+,.2f}")
-            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Toplam Giren - Toplam Çıkan")
-            k5.metric("GENEL KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}")
+            # DOLAR HESABI
+            toplam_dolar = tv / dolar_kuru
+            
+            k1, k2, k3, k4, k5, k6 = st.columns(6)
+            k1.metric("Portföy (TL)", f"{tv:,.0f} ₺")
+            k2.metric("Portföy (USD)", f"${toplam_dolar:,.0f}", help=f"Kur: {dolar_kuru:.2f}")
+            k3.metric("Maliyet", f"{tm:,.0f} ₺")
+            k4.metric("Anlık K/Z", f"{tv-tm:+,.0f} ₺")
+            k5.metric("Net Ana Para", f"{net_ana:,.0f} ₺")
+            k6.metric("GENEL KAR", f"{genel_kar:+,.0f} ₺", delta=f"%{genel_yuzde:.1f}")
 
 # --- TAB 3 ---
 with tab3:
     st.dataframe(
         df.sort_index(ascending=False).style.format({
-            "Fiyat": "{:,.4f}",
-            "Toplam": "{:,.2f}",
-            "Komisyon": "{:,.2f}",
-            "Adet": "{:.0f}"
+            "Fiyat": "{:,.4f}", "Toplam": "{:,.2f}",
+            "Komisyon": "{:,.2f}", "Adet": "{:.0f}"
         }), 
         use_container_width=True
     )
