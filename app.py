@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v27")
+st.set_page_config(layout="wide", page_title="Portfoy v28")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -132,14 +132,10 @@ tab1, tab2, tab3 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "📋 GEÇMİŞ"])
 
 # --- TAB 1: EKLEME & SİLME ---
 with tab1:
-    # Ekranı ikiye böl: Sol (Ekleme) - Sağ (Silme)
     col_ekle, col_sil = st.columns([2, 1])
 
-    # --- SOL KOLON: EKLEME ---
     with col_ekle:
         st.subheader("Yeni İşlem")
-        
-        # Yöntem Seçimi
         giris_yontemi = st.radio("Hesaplama Yöntemi:", 
                                  ["Birim Fiyat ile (Klasik)", "Toplam Tutar ile (Stopaj/Net)"], 
                                  horizontal=True)
@@ -156,7 +152,6 @@ with tab1:
             
             adet = st.number_input("Adet (Lot)", min_value=1, step=1)
             
-            # Dinamik Alanlar
             fiyat = 0.0
             kom = 0.0
             toplam = 0.0
@@ -172,7 +167,6 @@ with tab1:
             
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
-                    # Hesaplama Mantığı
                     if giris_yontemi == "Birim Fiyat ile (Klasik)":
                         if fiyat > 0:
                             raw_tutar = adet * fiyat
@@ -190,7 +184,6 @@ with tab1:
                             st.error("Tutar giriniz.")
                             st.stop()
                     
-                    # Kayıt
                     yeni = {}
                     yeni["Tarih"] = tarih.strftime("%Y-%m-%d")
                     yeni["Tur"] = "Hisse" if tur == "Hisse Senedi" else "Fon"
@@ -207,31 +200,24 @@ with tab1:
                         st.cache_data.clear()
                         st.rerun()
 
-    # --- SAĞ KOLON: SİLME (GERİ GELDİ!) ---
     with col_sil:
         st.subheader("Silme")
         try:
-            # Veriyi tekrar çekelim ki güncel olsun
             df_sil = get_data()
             if not df_sil.empty:
-                # Son 5 işlemi göster
                 st.dataframe(df_sil.tail(5)[["Sembol", "Islem", "Toplam"]], use_container_width=True)
-                
-                # Silinecek ID seçimi (Index numarasına göre - 2'den başlar çünkü Google'da 1. satır başlıktır)
-                # Google Sheets satır numarası = DataFrame Index + 2
                 secilen_index = st.selectbox("Silinecek Satır (Index):", df_sil.index.sort_values(ascending=False))
                 
                 if st.button("Seçili Satırı Sil"):
                     client = init_connection()
                     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
-                    # Google Sheets'te satır silme (Index + 2)
                     sheet.delete_rows(int(secilen_index) + 2)
                     st.success("Silindi!")
                     st.cache_data.clear()
                     st.rerun()
             else:
                 st.info("Kayıt yok.")
-        except Exception as e:
+        except:
             st.error("Silme listesi yüklenemedi.")
 
 # --- TAB 2 ---
@@ -283,13 +269,20 @@ with tab2:
         
         if liste:
             df_v = pd.DataFrame(liste)
+            
+            # --- TABLO AYARLARI ---
             cfg = {}
             cfg["Sembol"] = st.column_config.TextColumn("Varlık", disabled=True)
-            cfg["Not"] = st.column_config.TextColumn("D", disabled=True)
+            
+            # GÜNCELLEME: Adet Sütunu Görünür Yapıldı
+            cfg["Adet"] = st.column_config.NumberColumn("Adet", format="%.0f", disabled=True)
+            
             cfg["Güncel Fiyat"] = st.column_config.NumberColumn("Fiyat", format="%.4f")
             cfg["Toplam Maliyet"] = st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True)
             cfg["Tur"] = None
-            cfg["Adet"] = None
+            
+            # GÜNCELLEME: "D" (Not) Sütunu Gizlendi
+            cfg["Not"] = None 
             
             edited = st.data_editor(
                 df_v, 
