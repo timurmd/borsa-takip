@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v25")
+st.set_page_config(layout="wide", page_title="Portfoy v26")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -23,11 +23,10 @@ JSON_FILE = "service_account.json"
 # --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
     if val is None or val == "": return 0.0
+    if isinstance(val, (int, float)): return float(val)
     val_str = str(val).strip()
-    # 1.234.567,89 formatı için noktaları sil
     if "." in val_str and "," in val_str:
         val_str = val_str.replace(".", "")
-    # Virgülü noktaya çevir
     val_str = val_str.replace(",", ".")
     try:
         return float(val_str)
@@ -131,8 +130,14 @@ except:
 
 tab1, tab2, tab3 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "📋 GEÇMİŞ"])
 
-# --- TAB 1 ---
+# --- TAB 1: EKLEME (GÜNCELLENDİ) ---
 with tab1:
+    # Giriş Yöntemi Seçimi
+    giris_yontemi = st.radio("Hesaplama Yöntemi Seçiniz:", 
+                             ["Birim Fiyat ile (Klasik)", "Toplam Tutar ile (Stopaj/Net)"], 
+                             horizontal=True)
+    st.markdown("---")
+
     with st.form("ekle", clear_on_submit=True):
         c1, c2 = st.columns(2)
         tur = c1.radio("Tür", ["Hisse Senedi", "Yatırım Fonu"], horizontal=True)
@@ -140,22 +145,55 @@ with tab1:
         
         ca, cb = st.columns(2)
         tarih = ca.date_input("Tarih", datetime.now())
-        kod = cb.text_input("Kod").upper()
+        kod = cb.text_input("Kod (Örn: TTE)").upper()
         
-        cc, cd, ce = st.columns(3)
-        adet = cc.number_input("Adet", min_value=1, step=1)
-        fiyat = cd.number_input("Fiyat", min_value=0.0, format="%.6f")
-        kom = ce.number_input("Komisyon", min_value=0.0, format="%.2f")
+        # ADET (Her iki yöntemde de ortak)
+        adet = st.number_input("Adet (Lot)", min_value=1, step=1)
+        
+        # YÖNTEME GÖRE DEĞİŞEN ALANLAR
+        fiyat = 0.0
+        kom = 0.0
+        toplam = 0.0
+        
+        cc, cd = st.columns(2)
+        
+        if giris_yontemi == "Birim Fiyat ile (Klasik)":
+            # Eski Yöntem
+            fiyat = cc.number_input("Birim Fiyat", min_value=0.0, format="%.6f")
+            kom = cd.number_input("Komisyon", min_value=0.0, format="%.2f")
+            # Hesaplama form gönderilince yapılacak
+        else:
+            # Yeni Yöntem (Net Tutar)
+            toplam_girilen = cc.number_input("Hesaba Geçen NET Tutar (TL)", min_value=0.0, format="%.2f", help="Vergi ve komisyon düşülmüş, hesabınıza yatan net para.")
+            st.caption(f"Sistem, {adet} adet için birim fiyatı otomatik hesaplayacaktır.")
+            # Bu yöntemde komisyon sormuyoruz çünkü net tutarın içinde eridi kabul ediyoruz.
         
         if st.form_submit_button("KAYDET"):
-            if kod and fiyat > 0:
-                tutar = adet * fiyat
-                toplam = 0.0
-                if yon == "Alış":
-                    toplam = tutar + kom
-                else:
-                    toplam = tutar - kom
+            if kod and adet > 0:
                 
+                # --- HESAPLAMA MANTIĞI ---
+                if giris_yontemi == "Birim Fiyat ile (Klasik)":
+                    if fiyat > 0:
+                        raw_tutar = adet * fiyat
+                        if yon == "Alış":
+                            toplam = raw_tutar + kom
+                        else:
+                            toplam = raw_tutar - kom
+                    else:
+                        st.error("Lütfen fiyat giriniz.")
+                        st.stop()
+                else:
+                    # Toplam Tutar Yöntemi
+                    if toplam_girilen > 0:
+                        toplam = toplam_girilen
+                        # Birim fiyatı tersten bul (Effective Price)
+                        fiyat = toplam_girilen / adet
+                        kom = 0 # Net girildiği için komisyonu 0 kabul ediyoruz
+                    else:
+                        st.error("Lütfen toplam tutarı giriniz.")
+                        st.stop()
+                
+                # Kayıt İşlemi
                 yeni = {}
                 yeni["Tarih"] = tarih.strftime("%Y-%m-%d")
                 yeni["Tur"] = "Hisse" if tur == "Hisse Senedi" else "Fon"
@@ -238,18 +276,15 @@ with tab2:
             )
             
             res = []
-            # Anlık Durum Değişkenleri
-            top_v = 0
-            top_m = 0
-            
+            tv = 0
+            tm = 0
             for i, r in edited.iterrows():
                 pd_val = r["Adet"] * safe_float(r["Güncel Fiyat"])
                 md_val = safe_float(r["Toplam Maliyet"])
                 ktl = pd_val - md_val
                 ky = (ktl/md_val)*100 if md_val > 0 else 0
-                
-                top_v += pd_val
-                top_m += md_val
+                tv += pd_val
+                tm += md_val
                 
                 satir = {}
                 satir["Varlık"] = r["Sembol"]
@@ -259,7 +294,7 @@ with tab2:
                 satir["K/Z (%)"] = ky
                 res.append(satir)
             
-            st.markdown("### 📊 Portföy Detayı")
+            st.markdown("### 📊 Durum")
             rdf = pd.DataFrame(res)
             fmt = {
                 "Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}",
@@ -273,37 +308,34 @@ with tab2:
             
             st.divider()
             
-            # --- GELİŞMİŞ ANA PARA HESABI ---
-            # 1. Tüm zamanlarda cepten çıkan toplam para (Alışlar)
-            toplam_giren = df[df["Islem"] == "Alış"]["Toplam"].sum()
+            # --- GENEL TOPLAM HESABI (NET ANA PARA) ---
+            df_alis = df[df["Islem"] == "Alış"]
+            df_satis = df[df["Islem"] == "Satış"]
             
-            # 2. Cebe geri giren toplam para (Satışlar)
-            toplam_cikan = df[df["Islem"] == "Satış"]["Toplam"].sum()
+            # Alışların toplamı (Giren Para)
+            toplam_giren = df_alis["Toplam"].sum()
             
-            # 3. Net İçerideki Ana Para
+            # Satışların toplamı (Çıkan Para)
+            toplam_cikan = df_satis["Toplam"].sum()
+            
+            # Net Ana Para (Cebimizden çıkan net tutar)
             net_ana_para = toplam_giren - toplam_cikan
             
-            # 4. Gerçekleşmiş + Gerçekleşmemiş Genel Kar
-            genel_kar_tl = top_v - net_ana_para
+            # Genel Kar (Şu anki Varlık - Net Ana Para)
+            genel_kar_tl = tv - net_ana_para
             
             genel_kar_yuzde = 0
             if net_ana_para > 0:
                 genel_kar_yuzde = (genel_kar_tl / net_ana_para) * 100
             
-            # --- GÖSTERGE PANELİ ---
-            # 5 Kolonlu yapı
             k1, k2, k3, k4, k5 = st.columns(5)
-            
-            k1.metric("Portföy Değeri", f"{top_v:,.2f}", help="Şu anki varlıklarınızın toplam değeri")
-            k2.metric("Mevcut Maliyet", f"{top_m:,.2f}", help="Sadece elinizde kalan hisselerin maliyeti")
-            
-            # Anlık Kar (Sadece eldekiler)
-            anlik_kar = top_v - top_m
-            k3.metric("Anlık K/Z", f"{anlik_kar:+,.2f}", delta=None)
+            k1.metric("Portföy", f"{tv:,.2f}")
+            k2.metric("Maliyet", f"{tm:,.2f}", help="Eldeki hisselerin maliyeti")
+            k3.metric("Anlık K/Z", f"{tv-tm:+,.2f}")
             
             # Genel Durum
-            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Toplam yatırdığınız eksi çektiğiniz para")
-            k5.metric("GENEL TOPLAM KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}", help="Geçmiş karlar dahil toplam durum")
+            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Toplam Giren - Toplam Çıkan")
+            k5.metric("GENEL KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}")
 
 # --- TAB 3 ---
 with tab3:
