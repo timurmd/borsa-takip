@@ -11,38 +11,29 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v23")
+st.set_page_config(layout="wide", page_title="Portfoy v24")
 
-# 👇👇👇 BURAYI DOLDURMAYI UNUTMAYIN 👇👇👇
+# 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
-# 👆👆👆 --------------------------------- 👆👆👆
+# 👆👆👆 ------------------ 👆👆👆
 
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
 
-# --- KRİTİK DÜZELTME: SAF SAYI DÖNÜŞTÜRÜCÜ ---
+# --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
-    """Ne gelirse gelsin (Virgüllü string, noktalı string, int) float'a çevirir"""
-    if val is None or val == "":
-        return 0.0
+    if val is None or val == "": return 0.0
     
-    # Zaten sayıysa direkt döndür
-    if isinstance(val, (int, float)):
-        return float(val)
-    
-    # String (Yazı) ise temizlik yap
+    # Stringe çevir ki virgülleri görebilelim
     val_str = str(val).strip()
     
-    # Eğer hem nokta hem virgül varsa (Örn: 1.234,56)
-    # Noktaları (binlik ayraçlarını) sil, virgülü nokta yap
+    # Eğer "3.694.199" gibi gelirse noktaları sil (Binlik ayracı temizliği)
     if "." in val_str and "," in val_str:
-        val_str = val_str.replace(".", "") # Noktayı sil
-        val_str = val_str.replace(",", ".") # Virgülü nokta yap
-    
-    # Sadece virgül varsa (Örn: 77,32) -> (77.32) yap
-    elif "," in val_str:
-        val_str = val_str.replace(",", ".")
+        val_str = val_str.replace(".", "") 
         
+    # Virgülü noktaya çevir (3,69 -> 3.69)
+    val_str = val_str.replace(",", ".")
+    
     try:
         return float(val_str)
     except:
@@ -51,11 +42,7 @@ def safe_float(val):
 # --- GOOGLE BAĞLANTISI ---
 @st.cache_resource
 def init_connection():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     if os.path.exists(JSON_FILE):
         return gspread.authorize(Credentials.from_service_account_file(JSON_FILE, scopes=scopes))
     else:
@@ -73,42 +60,35 @@ def get_data():
     client = init_connection()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
-        
-        # ÖNEMLİ DEĞİŞİKLİK: get_all_records() YERİNE get_all_values()
-        # Bu sayede Google'ın sayı tahminlerini devre dışı bırakıp ham veriyi alıyoruz
+        # get_all_values() kullanarak her şeyi yazı (string) olarak alıyoruz.
+        # Bu sayede Google'ın sayıları bozmasını engelliyoruz.
         raw_data = sheet.get_all_values()
         
-        # İlk satır başlıktır
+        if len(raw_data) < 2: return pd.DataFrame()
+        
         header = raw_data[0]
         rows = raw_data[1:]
-        
         df = pd.DataFrame(rows, columns=header)
         
-        # Sayısal sütunları zorla düzelt
         cols = ["Adet", "Fiyat", "Komisyon", "Toplam"]
         for c in cols:
             if c in df.columns:
                 df[c] = df[c].apply(safe_float)
-                
         return df
-    except Exception as e:
-        st.error(f"Bağlantı Hatası: {e}")
-        st.stop()
+    except:
+        return pd.DataFrame()
 
 def save_transaction(veri):
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     
-    # Kaydederken Google Sheets'in anlayacağı formata (Virgüllü string) çevirip gönderelim
-    # Böylece Sheets'te de güzel görünür
-    fiyat_str = str(veri["Fiyat"]).replace(".", ",")
-    kom_str = str(veri["Komisyon"]).replace(".", ",")
-    top_str = str(veri["Toplam"]).replace(".", ",")
-    
+    # Google'a gönderirken virgüllü string yapalım
     row = [
         veri["Tarih"], veri["Tur"], veri["Islem"], 
         veri["Sembol"], veri["Adet"], 
-        fiyat_str, kom_str, top_str
+        str(veri["Fiyat"]).replace(".", ","),
+        str(veri["Komisyon"]).replace(".", ","),
+        str(veri["Toplam"]).replace(".", ",")
     ]
     sheet.append_row(row)
     
@@ -123,8 +103,21 @@ def get_fund_prices():
     client = init_connection()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
-        data = sheet.get_all_records()
-        return {str(r["Sembol"]): safe_float(r["Fiyat"]) for r in data}
+        
+        # --- DÜZELTME BURADA ---
+        # get_all_records yerine get_all_values kullanıyoruz.
+        # Böylece "3,69" verisi bozulmadan metin olarak geliyor.
+        raw_data = sheet.get_all_values()
+        
+        # İlk satır başlık, atla
+        fiyat_dict = {}
+        for row in raw_data[1:]:
+            if len(row) >= 2:
+                sembol = str(row[0])
+                fiyat_raw = row[1] # Bu artık "3,694199" (string)
+                fiyat_dict[sembol] = safe_float(fiyat_raw)
+                
+        return fiyat_dict
     except:
         return {}
 
@@ -168,7 +161,6 @@ with tab1:
         
         cc, cd, ce = st.columns(3)
         adet = cc.number_input("Adet", min_value=1, step=1)
-        
         fiyat = cd.number_input("Fiyat", min_value=0.0, format="%.6f")
         kom = ce.number_input("Komisyon", min_value=0.0, format="%.2f")
         
@@ -304,13 +296,4 @@ with tab2:
 
 # --- TAB 3 ---
 with tab3:
-    # Geçmiş Tablosunu da Formatlı Göster
-    st.dataframe(
-        df.sort_index(ascending=False).style.format({
-            "Fiyat": "{:,.4f}",
-            "Toplam": "{:,.2f}",
-            "Komisyon": "{:,.2f}",
-            "Adet": "{:.0f}"
-        }), 
-        use_container_width=True
-    )
+    st.dataframe(df, use_container_width=True)
