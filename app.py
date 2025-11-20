@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v28")
+st.set_page_config(layout="wide", page_title="Portfoy v29")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -19,6 +19,38 @@ SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
+
+# ==========================================
+# 🔒 GÜVENLİK DUVARI (LOGIN EKRANI)
+# ==========================================
+def check_password():
+    """Şifre kontrolü yapar"""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["app_password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Şifreyi hafızadan sil
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # İlk açılışta şifre sor
+        st.text_input("Lütfen Şifre Giriniz", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Şifre yanlışsa tekrar sor
+        st.text_input("Lütfen Şifre Giriniz", type="password", on_change=password_entered, key="password")
+        st.error("😕 Şifre yanlış.")
+        return False
+    else:
+        # Şifre doğruysa devam et
+        return True
+
+if not check_password():
+    st.stop() # Şifre girilmediyse kodun geri kalanını çalıştırma!
+
+# ==========================================
+# 🔓 BURADAN SONRASI SADECE ŞİFRE BİLENE GÖRÜNÜR
+# ==========================================
 
 # --- AKILLI SAYI DÖNÜŞTÜRÜCÜ ---
 def safe_float(val):
@@ -122,6 +154,10 @@ def renk(val):
 
 # --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy")
+# Çıkış Yap Butonu (Sidebar'a eklenir)
+if st.sidebar.button("🔒 Çıkış Yap"):
+    del st.session_state["password_correct"]
+    st.rerun()
 
 try:
     df = get_data()
@@ -270,18 +306,12 @@ with tab2:
         if liste:
             df_v = pd.DataFrame(liste)
             
-            # --- TABLO AYARLARI ---
             cfg = {}
             cfg["Sembol"] = st.column_config.TextColumn("Varlık", disabled=True)
-            
-            # GÜNCELLEME: Adet Sütunu Görünür Yapıldı
             cfg["Adet"] = st.column_config.NumberColumn("Adet", format="%.0f", disabled=True)
-            
             cfg["Güncel Fiyat"] = st.column_config.NumberColumn("Fiyat", format="%.4f")
             cfg["Toplam Maliyet"] = st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True)
             cfg["Tur"] = None
-            
-            # GÜNCELLEME: "D" (Not) Sütunu Gizlendi
             cfg["Not"] = None 
             
             edited = st.data_editor(
