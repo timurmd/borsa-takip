@@ -2,41 +2,68 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
+import os
+import warnings
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import os
+
+# Uyarıları sustur
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Bulut Portföy v1")
-SHEET_NAME = "BorsaPortfoy" # Google Sheets'teki dosya adınızla AYNI OLMALI
-JSON_FILE = "service_account.json" # İndirdiğiniz anahtar dosyasının adı
+st.set_page_config(layout="wide", page_title="Portfoy v17")
+DATA_FILE = "portfolio_transactions.csv"
+SHEET_NAME = "BorsaPortfoy" # Google Sheets'teki adınızla AYNI OLMALI
+JSON_FILE = "service_account.json"
 
-# --- GOOGLE SHEETS BAĞLANTISI ---
+# --- GOOGLE SHEETS BAĞLANTISI (Tamirci Modu) ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # Streamlit Cloud'da mı yoksa yerelde mi olduğumuzu anla
+    # 1. Durum: Bilgisayarınızda (service_account.json var mı?)
     if os.path.exists(JSON_FILE):
         creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
     else:
-        # Cloud'a yükleyince burası çalışacak (Secrets'tan okuyacak)
-        creds_dict = st.secrets["gcp_service_account"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        
+        # 2. Durum: Streamlit Cloud'da (Secrets kullan)
+        try:
+            # Secrets verisini normal sözlüğe çevir
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            
+            # --- KRİTİK DÜZELTME BURADA ---
+            # Private Key içindeki \n karakterleri bozulduysa düzeltiyoruz
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            # ------------------------------
+            
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        except Exception as e:
+            st.error(f"Bağlantı Hatası Detayı: {e}")
+            st.stop()
+            
     client = gspread.authorize(creds)
     return client
 
+# Veri Çekme
 def get_data():
     client = init_connection()
-    sheet = client.open(SHEET_NAME).worksheet("Islemler")
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        sheet = client.open(SHEET_NAME).worksheet("Islemler")
+        data = sheet.get_all_records()
+        return pd.DataFrame(data)
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"'{SHEET_NAME}' adında bir tablo bulunamadı! Google Sheets adını kontrol edin.")
+        st.stop()
+    except Exception as e:
+        # Eğer tablo boşsa veya başka hata varsa boş dön
+        return pd.DataFrame()
 
+# Veri Kaydetme
 def save_transaction(yeni_veri):
     client = init_connection()
     sheet = client.open(SHEET_NAME).worksheet("Islemler")
-    # Veriyi listenin sonuna ekle
+    
+    # Satır hazırla
     row = [
         yeni_veri["Tarih"], yeni_veri["Tur"], yeni_veri["Islem"], 
         yeni_veri["Sembol"], yeni_veri["Adet"], yeni_veri["Fiyat"], 
@@ -44,25 +71,27 @@ def save_transaction(yeni_veri):
     ]
     sheet.append_row(row)
     
-    # Fiyatlar sayfasına da sembolü ekleyelim (Eğer yoksa)
-    price_sheet = client.open(SHEET_NAME).worksheet("Fiyatlar")
-    existing = price_sheet.col_values(1) # A sütunu
-    if yeni_veri["Sembol"] not in existing:
-        price_sheet.append_row([yeni_veri["Sembol"], 0, ""])
+    # Fiyatlar sayfasına sembol ekle
+    try:
+        price_sheet = client.open(SHEET_NAME).worksheet("Fiyatlar")
+        existing = price_sheet.col_values(1)
+        if yeni_veri["Sembol"] not in existing:
+            price_sheet.append_row([yeni_veri["Sembol"], 0, ""])
+    except:
+        pass 
 
+# Fon Fiyatlarını Sheets'ten Al
 def get_fund_prices_from_sheet():
-    """Google'ın bulduğu fiyatları çeker"""
     client = init_connection()
     try:
         sheet = client.open(SHEET_NAME).worksheet("Fiyatlar")
         data = sheet.get_all_records()
-        # Sözlüğe çevir: {"TTE": 5.12, "THYAO": 0}
-        fiyat_dict = {row["Sembol"]: row["Fiyat"] for row in data}
+        fiyat_dict = {str(row["Sembol"]): float(row["Fiyat"]) for row in data if str(row["Fiyat"]).replace('.','',1).isdigit()}
         return fiyat_dict
     except:
         return {}
 
-# --- FİYAT ÇEKME (HİSSELER İÇİN) ---
+# --- DİĞER FONKSİYONLAR ---
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
     try:
@@ -80,18 +109,18 @@ def renk(val):
     return 'color: white;'
 
 # --- ARAYÜZ ---
-st.title("☁️ Bulut Portföy (Google Sheets)")
+st.title("☁️ Bulut Portföy")
 
+# Verileri Getir
 try:
     df = get_data()
 except Exception as e:
-    st.error("Google Sheets'e bağlanılamadı! Lütfen 'service_account.json' dosyasını kontrol edin.")
-    st.error(f"Hata: {e}")
+    st.error("Hata oluştu.")
     st.stop()
 
 tab1, tab2, tab3 = st.tabs(["➕ İŞLEM EKLE", "📊 PORTFÖY", "📋 GEÇMİŞ"])
 
-# --- TAB 1: EKLEME ---
+# --- TAB 1 ---
 with tab1:
     with st.form("ekle_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -100,7 +129,7 @@ with tab1:
         
         col_a, col_b = st.columns(2)
         tarih = col_a.date_input("Tarih", datetime.now())
-        kod = col_b.text_input("Kod (Örn: TTE, THYAO)").upper()
+        kod = col_b.text_input("Kod").upper()
         
         c3, c4, c5 = st.columns(3)
         adet = c3.number_input("Adet", min_value=1, step=1)
@@ -119,24 +148,22 @@ with tab1:
                     "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam
                 }
                 
-                with st.spinner("Google Sheets'e yazılıyor..."):
+                with st.spinner("Buluta kaydediliyor..."):
                     save_transaction(yeni)
-                    st.success("Kaydedildi! Veriler buluta gönderildi.")
-                    st.cache_data.clear() # Cache temizle ki yeni veri görünsün
+                    st.success("Kaydedildi!")
+                    st.cache_data.clear()
                     st.rerun()
 
-# --- TAB 2: PORTFÖY ---
+# --- TAB 2 ---
 with tab2:
-    if st.button("🔄 Verileri Güncelle"):
+    if st.button("🔄 Yenile"):
         st.cache_data.clear()
         st.rerun()
 
     if df.empty:
-        st.info("Henüz işlem yok.")
+        st.info("İşlem yok.")
     else:
-        # Google Sheets'ten (Apps Script'in bulduğu) Fon fiyatlarını al
         sheet_fiyatlar = get_fund_prices_from_sheet()
-        
         semboller = df["Sembol"].unique()
         liste = []
         
@@ -154,18 +181,16 @@ with tab2:
                 ort_maliyet = t_maliyet / alis["Adet"].sum()
                 eldeki_mal = ort_maliyet * net_adet
                 
-                # Fiyat Belirleme
                 guncel = 0.0
                 notlar = ""
                 
                 if v_tur == "Hisse":
-                    guncel = get_stock_price(s) # Hisseleri yfinance'dan al
+                    guncel = get_stock_price(s)
                 else:
-                    # Fonları Google Sheets'ten al (Apps Script bulmuştu)
-                    guncel = float(sheet_fiyatlar.get(s, 0)) 
+                    guncel = float(sheet_fiyatlar.get(s, 0))
                     if guncel == 0:
-                         guncel = ort_maliyet # Bulamazsa maliyeti göster
-                         notlar = "⚠️ Fiyat Bekleniyor"
+                         guncel = ort_maliyet
+                         notlar = "⚠️ Bekleniyor"
                 
                 liste.append({
                     "Sembol": s, "Tur": v_tur, "Adet": net_adet,
@@ -176,8 +201,6 @@ with tab2:
         
         if liste:
             df_view = pd.DataFrame(liste)
-            
-            # Tablo Ayarları
             cfg = {
                 "Sembol": st.column_config.TextColumn("Varlık", disabled=True),
                 "Not": st.column_config.TextColumn("Durum", disabled=True),
@@ -186,44 +209,32 @@ with tab2:
                 "Tur": None, "Adet": None
             }
             
-            edited = st.data_editor(
-                df_view, column_config=cfg,
-                use_container_width=True, hide_index=True, key="editor_gs"
-            )
+            edited = st.data_editor(df_view, column_config=cfg, use_container_width=True, hide_index=True, key="gs_editor")
             
-            # Sonuç Hesapla
             res = []
             top_v = 0; top_m = 0
-            
             for i, row in edited.iterrows():
                 p_deg = row["Adet"] * row["Güncel Fiyat"]
                 m_deg = row["Toplam Maliyet"]
                 kar_tl = p_deg - m_deg
                 kar_y = (kar_tl / m_deg)*100 if m_deg > 0 else 0
-                
                 top_v += p_deg; top_m += m_deg
-                
-                res.append({
-                    "Varlık": row["Sembol"], "Toplam Maliyet": m_deg,
-                    "Piyasa Değeri": p_deg, "K/Z (TL)": kar_tl, "K/Z (%)": kar_y
-                })
+                res.append({"Varlık": row["Sembol"], "Toplam Maliyet": m_deg, "Piyasa Değeri": p_deg, "K/Z (TL)": kar_tl, "K/Z (%)": kar_y})
             
             st.markdown("### 📊 Durum")
             st_df = pd.DataFrame(res).style.format({
                 "Toplam Maliyet": "{:,.2f}", "Piyasa Değeri": "{:,.2f}",
                 "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
             }).map(renk, subset=["K/Z (TL)", "K/Z (%)"])
-            
             st.dataframe(st_df, use_container_width=True, hide_index=True)
             
             st.divider()
             net_k = top_v - top_m
             net_y = (net_k/top_m)*100 if top_m > 0 else 0
-            
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Varlık", f"{top_v:,.2f}"); k2.metric("Maliyet", f"{top_m:,.2f}")
-            k3.metric("Net K/Z", f"{net_k:+,.2f}"); k4.metric("Getiri", f"%{net_y:+.2f}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Varlık", f"{top_v:,.2f}"); c2.metric("Maliyet", f"{top_m:,.2f}")
+            c3.metric("Net K/Z", f"{net_k:+,.2f}"); c4.metric("Getiri", f"%{net_y:+.2f}")
 
-# --- TAB 3: GEÇMİŞ ---
+# --- TAB 3 ---
 with tab3:
     st.dataframe(df, use_container_width=True)
