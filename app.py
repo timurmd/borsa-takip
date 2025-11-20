@@ -286,13 +286,36 @@ with tab2:
             )
             
             st.divider()
-            nk = tv - tm
-            ny = (nk/tm)*100 if tm > 0 else 0
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Varlık", f"{tv:,.2f}")
-            k2.metric("Maliyet", f"{tm:,.2f}")
-            k3.metric("Net K/Z", f"{nk:+,.2f}")
-            k4.metric("Getiri", f"%{ny:+.2f}")
+            
+            # --- GELİŞMİŞ HESAPLAMA (ANA PARA TAKİBİ) ---
+            # 1. Toplam yatırdığımız para (Tüm Alışlar)
+            toplam_giren = df[df["Islem"] == "Alış"]["Toplam"].sum()
+            
+            # 2. Cebimize geri giren para (Tüm Satışlar)
+            toplam_cikan = df[df["Islem"] == "Satış"]["Toplam"].sum()
+            
+            # 3. İçerideki Net Ana Para (Cebimizden çıkan net tutar)
+            # Örnek: 100k yatırdın, 150k çektin, 150k geri yatırdın -> Net içerideki para 100k kalır.
+            net_ana_para = toplam_giren - toplam_cikan
+            
+            # 4. Toplam Genel Kar (Eldeki Varlık - Net Ana Para)
+            # Bu, satıp harcadığınız karları da hesaba katar.
+            genel_kar_tl = t_var - net_ana_para
+            
+            genel_kar_yuzde = 0
+            if net_ana_para > 0:
+                genel_kar_yuzde = (genel_kar_tl / net_ana_para) * 100
+            
+            # --- GÖSTERGE PANELİ ---
+            k1, k2, k3, k4, k5 = st.columns(5)
+            
+            k1.metric("Portföy Değeri", f"{t_var:,.2f}")
+            k2.metric("Anlık Maliyet", f"{t_mal:,.2f}", help="Sadece eldeki hisselerin maliyeti")
+            k3.metric("Anlık K/Z", f"{nk:+,.2f}", delta=f"%{ny:+.2f}", help="Sadece eldeki hisselerin karı")
+            
+            # Yeni Eklenenler:
+            k4.metric("Net Ana Para", f"{net_ana_para:,.2f}", help="Cebinizden çıkan toplam net para")
+            k5.metric("GENEL TOPLAM KAR", f"{genel_kar_tl:+,.2f}", delta=f"%{genel_kar_yuzde:+.2f}", help="Geçmiş satışlar dahil toplam kar")
 
 # --- TAB 3 ---
 with tab3:
