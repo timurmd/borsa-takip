@@ -1,18 +1,19 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import warnings
 import gspread
 from google.oauth2.service_account import Credentials
-import plotly.express as px # Grafik Kütüphanesi
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v30")
+st.set_page_config(layout="wide", page_title="Portfoy v31 (Analiz)")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -66,6 +67,9 @@ def get_data():
         for c in cols:
             if c in df.columns:
                 df[c] = df[c].apply(safe_float)
+        
+        # Tarihi datetime formatına çevir (Sıralama ve grafik için şart)
+        df["Tarih"] = pd.to_datetime(df["Tarih"], dayfirst=False, errors='coerce')
         return df
     except:
         return pd.DataFrame()
@@ -104,6 +108,82 @@ def get_fund_prices():
     except:
         return {}
 
+# --- PİYASA VE KIYASLAMA VERİLERİ ---
+@st.cache_data(ttl=3600) # 1 Saat Cache
+def get_historical_market_data():
+    """Son 5 yılın Dolar ve Altın verilerini tek seferde çeker"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*5)
+    
+    # Dolar Kuru (USD/TRY)
+    usd_df = yf.download("USDTRY=X", start=start_date, end=end_date, progress=False)
+    usd_df = usd_df['Close'].reset_index()
+    usd_df.columns = ['Date', 'USD']
+    usd_df['Date'] = pd.to_datetime(usd_df['Date']).dt.date # Sadece tarih
+    
+    # Altın Ons (USD) -> Gram Altın (TL) Çevrimi
+    gold_df = yf.download("GC=F", start=start_date, end=end_date, progress=False)
+    gold_df = gold_df['Close'].reset_index()
+    gold_df.columns = ['Date', 'Gold_Ounce']
+    gold_df['Date'] = pd.to_datetime(gold_df['Date']).dt.date
+    
+    # Birleştirme
+    market = pd.merge(usd_df, gold_df, on='Date', how='outer').sort_values('Date').ffill()
+    
+    # Gram Altın Hesabı: (Ons * Dolar) / 31.1035
+    market['Gram_Gold'] = (market['Gold_Ounce'] * market['USD']) / 31.1035
+    
+    # Tarihi index yap (Hızlı arama için)
+    market.set_index('Date', inplace=True)
+    
+    return market
+
+def calculate_benchmarks(df_transactions):
+    """Nakit akışına göre Dolar ve Altın portföyü simülasyonu"""
+    market = get_historical_market_data()
+    
+    shadow_usd = 0
+    shadow_gold = 0
+    
+    # İşlemleri tarihe göre sırala
+    df_sorted = df_transactions.sort_values("Tarih")
+    
+    for _, row in df_sorted.iterrows():
+        t_date = row["Tarih"].date()
+        t_tutar = float(row["Toplam"]) # İşlem tutarı
+        
+        # O tarihteki kurları bul (Veri yoksa en yakın geçmişi al)
+        try:
+            # asof: O tarihe en yakın önceki tarihi bulur (Haftasonu işlem yaptıysanız Cuma kurunu alır)
+            idx = market.index.asof(t_date)
+            day_rates = market.loc[idx]
+            usd_rate = day_rates['USD']
+            gold_rate = day_rates['Gram_Gold']
+        except:
+            continue # Veri yoksa atla
+            
+        # ALIŞ İŞLEMİ (Para Sistemden Çıktı -> Yatırıma Girdi)
+        if row["Islem"] == "Alış":
+            # O parayla Dolar/Altın alsaydık kaç tane olurdu?
+            shadow_usd += t_tutar / usd_rate
+            shadow_gold += t_tutar / gold_rate
+            
+        # SATIŞ İŞLEMİ (Para Sisteme Girdi -> Cebe Döndü)
+        # Satışta elimizdeki gölge varlık azalır
+        elif row["Islem"] == "Satış":
+            shadow_usd -= t_tutar / usd_rate
+            shadow_gold -= t_tutar / gold_rate
+            
+    # BUGÜNKÜ DEĞERLER
+    # Elimizde kalan gölge varlıkların bugünkü değeri
+    try:
+        last_rates = market.iloc[-1]
+        current_usd_val = shadow_usd * last_rates['USD']
+        current_gold_val = shadow_gold * last_rates['Gram_Gold']
+        return current_usd_val, current_gold_val
+    except:
+        return 0, 0
+
 # --- YARDIMCI ---
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
@@ -114,14 +194,6 @@ def get_stock_price(symbol):
         return val if val is not None else 0.0
     except:
         return 0.0
-
-@st.cache_data(ttl=3600) # Dolar kurunu 1 saat tut
-def get_usd_rate():
-    try:
-        # Yahoo Finance'dan Dolar/TL kuru
-        return yf.Ticker("USDTRY=X").fast_info['last_price']
-    except:
-        return 1.0 # Hata olursa bölme hatası olmasın
 
 def renk(val):
     c = 'white'
@@ -248,7 +320,6 @@ with tab2:
         st.info("Veri yok.")
     else:
         sheet_fiyat = get_fund_prices()
-        dolar_kuru = get_usd_rate() # Dolar kurunu çek
         
         semboller = df["Sembol"].unique()
         liste = []
@@ -284,25 +355,42 @@ with tab2:
                 item["Not"] = notlar
                 item["Toplam Maliyet"] = float(em)
                 item["Güncel Fiyat"] = float(guncel)
-                item["Piyasa Değeri"] = float(net * guncel) # Grafik için gerekli
+                item["Piyasa Değeri"] = float(net * guncel)
                 liste.append(item)
         
         if liste:
             df_v = pd.DataFrame(liste)
             
-            # --- GRAFİK BÖLÜMÜ ---
+            # --- GELİŞMİŞ GRAFİK BÖLÜMÜ ---
+            # 1. Kıyaslama Verilerini Hesapla
+            alt_usd, alt_gold = calculate_benchmarks(df)
+            toplam_varlik = df_v["Piyasa Değeri"].sum()
+            
+            # Grafik Verisi Hazırla
+            benchmark_data = pd.DataFrame({
+                "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
+                "Değer (TL)": [toplam_varlik, alt_usd, alt_gold],
+                "Renk": ["blue", "green", "gold"]
+            })
+            
             col_grafik1, col_grafik2 = st.columns(2)
             
             with col_grafik1:
-                st.subheader("Varlık Dağılımı (Pasta)")
-                # Pasta Grafik
+                st.subheader("Dağılım (Pasta)")
                 fig1 = px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4)
                 st.plotly_chart(fig1, use_container_width=True)
             
             with col_grafik2:
-                st.subheader("Büyüklük Haritası (Treemap)")
-                # Treemap (İç içe kutular)
-                fig2 = px.treemap(df_v, path=['Tur', 'Sembol'], values='Piyasa Değeri')
+                st.subheader("Kıyaslama (Benchmark)")
+                # Bar Grafiği
+                fig2 = px.bar(
+                    benchmark_data, 
+                    x="Varlık", 
+                    y="Değer (TL)", 
+                    color="Varlık",
+                    text_auto='.2s',
+                    color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}
+                )
                 st.plotly_chart(fig2, use_container_width=True)
             
             # --- TABLO ---
@@ -313,7 +401,7 @@ with tab2:
             cfg["Toplam Maliyet"] = st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True)
             cfg["Tur"] = None
             cfg["Not"] = None
-            cfg["Piyasa Değeri"] = None # Tabloda gösterme, grafikte kullandık
+            cfg["Piyasa Değeri"] = None
             
             edited = st.data_editor(
                 df_v, 
@@ -341,7 +429,6 @@ with tab2:
                 res.append(satir)
             
             st.divider()
-            st.caption("Detaylı Tablo")
             st.dataframe(
                 pd.DataFrame(res).style.format({
                     "Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}",
@@ -352,7 +439,6 @@ with tab2:
             
             st.divider()
             
-            # Hesaplamalar
             df_alis = df[df["Islem"] == "Alış"]
             df_satis = df[df["Islem"] == "Satış"]
             giren = df_alis["Toplam"].sum()
@@ -361,16 +447,12 @@ with tab2:
             genel_kar = tv - net_ana
             genel_yuzde = (genel_kar / net_ana) * 100 if net_ana > 0 else 0
             
-            # DOLAR HESABI
-            toplam_dolar = tv / dolar_kuru
-            
-            k1, k2, k3, k4, k5, k6 = st.columns(6)
+            k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Portföy (TL)", f"{tv:,.0f} ₺")
-            k2.metric("Portföy (USD)", f"${toplam_dolar:,.0f}", help=f"Kur: {dolar_kuru:.2f}")
-            k3.metric("Maliyet", f"{tm:,.0f} ₺")
-            k4.metric("Anlık K/Z", f"{tv-tm:+,.0f} ₺")
-            k5.metric("Net Ana Para", f"{net_ana:,.0f} ₺")
-            k6.metric("GENEL KAR", f"{genel_kar:+,.0f} ₺", delta=f"%{genel_yuzde:.1f}")
+            k2.metric("Maliyet", f"{tm:,.0f} ₺")
+            k3.metric("Anlık K/Z", f"{tv-tm:+,.0f} ₺")
+            k4.metric("Net Ana Para", f"{net_ana:,.0f} ₺")
+            k5.metric("GENEL KAR", f"{genel_kar:+,.0f} ₺", delta=f"%{genel_yuzde:.1f}")
 
 # --- TAB 3 ---
 with tab3:
