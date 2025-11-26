@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v34 (Zaman Tüneli)")
+st.set_page_config(layout="wide", page_title="Portfoy v35")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -88,35 +88,23 @@ def get_fund_prices():
         return {str(r[0]): safe_float(r[1]) for r in raw[1:] if len(r) >= 2}
     except: return {}
 
-# --- GEÇMİŞ KAYIT SİSTEMİ (YENİ) ---
+# --- GEÇMİŞ KAYIT SİSTEMİ ---
 def save_daily_snapshot(toplam_varlik, toplam_maliyet, dolar_kuru):
-    """Bugünün verisini Gecmis sayfasına kaydeder"""
     client = init_connection()
-    try:
-        sheet = client.open_by_key(SHEET_ID).worksheet("Gecmis")
-    except:
-        return # Sayfa yoksa hata verme
-        
+    try: sheet = client.open_by_key(SHEET_ID).worksheet("Gecmis")
+    except: return
     bugun = datetime.now().strftime("%Y-%m-%d")
-    
-    # Bugünün kaydı var mı kontrol et
     dates = sheet.col_values(1)
-    
+    val_str = str(toplam_varlik).replace(".", ",")
+    mal_str = str(toplam_maliyet).replace(".", ",")
+    kur_str = str(dolar_kuru).replace(".", ",")
     if bugun not in dates:
-        # Yoksa kaydet
-        row = [
-            bugun, 
-            str(toplam_varlik).replace(".", ","), 
-            str(toplam_maliyet).replace(".", ","),
-            str(dolar_kuru).replace(".", ",")
-        ]
-        sheet.append_row(row)
+        sheet.append_row([bugun, val_str, mal_str, kur_str])
     else:
-        # Varsa güncelle (Belki gün içinde işlem yaptınız)
         row_idx = dates.index(bugun) + 1
-        sheet.update_cell(row_idx, 2, str(toplam_varlik).replace(".", ","))
-        sheet.update_cell(row_idx, 3, str(toplam_maliyet).replace(".", ","))
-        sheet.update_cell(row_idx, 4, str(dolar_kuru).replace(".", ","))
+        sheet.update_cell(row_idx, 2, val_str)
+        sheet.update_cell(row_idx, 3, mal_str)
+        sheet.update_cell(row_idx, 4, kur_str)
 
 def get_history_data():
     client = init_connection()
@@ -131,11 +119,46 @@ def get_history_data():
         return df.sort_values("Tarih", ascending=False)
     except: return pd.DataFrame()
 
-# --- YARDIMCI ---
+# --- PİYASA VE KIYASLAMA ---
+@st.cache_data(ttl=3600)
+def get_historical_market_data():
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*5)
+    usd_df = yf.download("USDTRY=X", start=start_date, end=end_date, progress=False)
+    if usd_df.empty: return pd.DataFrame()
+    usd_df = usd_df['Close'].reset_index(); usd_df.columns = ['Date', 'USD']; usd_df['Date'] = pd.to_datetime(usd_df['Date']).dt.date
+    gold_df = yf.download("GC=F", start=start_date, end=end_date, progress=False)
+    if gold_df.empty: return pd.DataFrame()
+    gold_df = gold_df['Close'].reset_index(); gold_df.columns = ['Date', 'Gold_Ounce']; gold_df['Date'] = pd.to_datetime(gold_df['Date']).dt.date
+    market = pd.merge(usd_df, gold_df, on='Date', how='outer').sort_values('Date').ffill()
+    market['Gram_Gold'] = (market['Gold_Ounce'] * market['USD']) / 31.1035
+    market.set_index('Date', inplace=True)
+    return market
+
+def calculate_benchmarks(df_transactions):
+    market = get_historical_market_data()
+    if market.empty: return 0, 0, 0, 0
+    shadow_usd = 0; shadow_gold = 0
+    df_sorted = df_transactions.sort_values("Tarih")
+    for _, row in df_sorted.iterrows():
+        t_date = row["Tarih"].date(); t_tutar = float(row["Toplam"])
+        try:
+            idx = market.index.asof(t_date); day_rates = market.loc[idx]
+            usd = day_rates['USD']; gold = day_rates['Gram_Gold']
+        except: continue
+        if row["Islem"] == "Alış":
+            shadow_usd += t_tutar / usd; shadow_gold += t_tutar / gold
+        elif row["Islem"] == "Satış":
+            shadow_usd -= t_tutar / usd; shadow_gold -= t_tutar / gold
+    try:
+        last = market.iloc[-1]
+        return shadow_usd * last['USD'], shadow_gold * last['Gram_Gold'], shadow_usd, shadow_gold
+    except: return 0, 0, 0, 0
+
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
     try:
-        symbol = symbol.upper()
+        symbol = symbol.strip().upper()
         if not symbol.endswith(".IS"): symbol = symbol + ".IS"
         v = yf.Ticker(symbol).fast_info['last_price']
         return v if v is not None else 0.0
@@ -149,22 +172,17 @@ def get_usd_rate():
 # --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy & Analiz")
 
-# GÜVENLİK
 def check_password():
     if "password_correct" not in st.session_state:
-        st.text_input("Şifre", type="password", key="password", on_change=password_entered)
-        return False
+        st.text_input("Şifre", type="password", key="password", on_change=password_entered); return False
     return st.session_state["password_correct"]
 def password_entered():
     if st.session_state["password"] == st.secrets["app_password"]:
-        st.session_state["password_correct"] = True
-        del st.session_state["password"]
+        st.session_state["password_correct"] = True; del st.session_state["password"]
     else: st.session_state["password_correct"] = False
 
 if not check_password(): st.stop()
-if st.sidebar.button("🔒 Çıkış"):
-    del st.session_state["password_correct"]
-    st.rerun()
+if st.sidebar.button("🔒 Çıkış"): del st.session_state["password_correct"]; st.rerun()
 
 try: df = get_data()
 except: st.stop()
@@ -254,15 +272,31 @@ with tab2:
         
         if liste:
             df_v = pd.DataFrame(liste)
-            # --- GÜNLÜK KAYIT ---
             toplam_v = df_v["Piyasa Değeri"].sum()
             toplam_m = df_v["Toplam Maliyet"].sum()
-            save_daily_snapshot(toplam_v, toplam_m, dolar) # Otomatik Kayıt
+            save_daily_snapshot(toplam_v, toplam_m, dolar)
             
-            # Grafikler
-            c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4), use_container_width=True)
-            with c2: st.plotly_chart(px.treemap(df_v, path=['Tur', 'Sembol'], values='Piyasa Değeri'), use_container_width=True)
+            # KIYASLAMA VERİLERİ
+            alt_usd, alt_gold, _, _ = calculate_benchmarks(df)
+            bench_df = pd.DataFrame({
+                "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
+                "Değer (TL)": [toplam_v, alt_usd, alt_gold],
+                "Renk": ["blue", "green", "gold"]
+            })
+
+            # --- GRAFİKLER GERİ GELDİ ---
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.subheader("Varlık Dağılımı")
+                st.plotly_chart(px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4), use_container_width=True)
+            with col_g2:
+                st.subheader("Kıyaslama (Benchmark)")
+                fig_b = px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s',
+                               color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"})
+                st.plotly_chart(fig_b, use_container_width=True)
+            
+            st.subheader("Büyüklük Haritası")
+            st.plotly_chart(px.treemap(df_v, path=['Tur', 'Sembol'], values='Piyasa Değeri'), use_container_width=True)
             
             # Tablo
             cfg = {"Sembol": st.column_config.TextColumn("Varlık"), "Adet": st.column_config.NumberColumn("Adet", format="%.0f"),
@@ -294,44 +328,29 @@ with tab2:
             k5.metric("GENEL KAR", f"{genel_k:+,.0f} ₺", delta=f"%{genel_ky:.1f}")
 
 # --- TAB 3: ANALİZ VE GİDİŞAT ---
-with tab4:
+with tab3:
     st.subheader("📈 Performans Karnesi")
     df_hist = get_history_data()
-    
     if not df_hist.empty:
-        # Grafik
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], mode='lines+markers', name='Portföy', line=dict(color='#2ecc71', width=3)))
         fig.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], mode='lines', name='Maliyet', line=dict(color='gray', dash='dot')))
         st.plotly_chart(fig, use_container_width=True)
         
-        # Değişim Tablosu Hazırla
         bugun_val = df_hist.iloc[0]["ToplamVarlik"]
         bugun_usd = bugun_val / df_hist.iloc[0]["DolarKuru"]
-        
         degisimler = []
-        
-        # 1 Gün Önce
         if len(df_hist) > 1:
-            dun_val = df_hist.iloc[1]["ToplamVarlik"]
-            dun_usd = dun_val / df_hist.iloc[1]["DolarKuru"]
+            dun_val = df_hist.iloc[1]["ToplamVarlik"]; dun_usd = dun_val / df_hist.iloc[1]["DolarKuru"]
             degisimler.append({"Periyot": "Dünden Bugüne", "Fark (TL)": bugun_val - dun_val, "Fark ($)": bugun_usd - dun_usd, "Getiri (%)": ((bugun_val - dun_val)/dun_val)*100})
-            
-        # 1 Hafta Önce (Yaklaşık 7 kayıt)
         if len(df_hist) > 7:
-            hafta_val = df_hist.iloc[7]["ToplamVarlik"]
-            hafta_usd = hafta_val / df_hist.iloc[7]["DolarKuru"]
+            hafta_val = df_hist.iloc[7]["ToplamVarlik"]; hafta_usd = hafta_val / df_hist.iloc[7]["DolarKuru"]
             degisimler.append({"Periyot": "Bu Hafta", "Fark (TL)": bugun_val - hafta_val, "Fark ($)": bugun_usd - hafta_usd, "Getiri (%)": ((bugun_val - hafta_val)/hafta_val)*100})
-            
         if degisimler:
-            st.dataframe(pd.DataFrame(degisimler).style.format({
-                "Fark (TL)": "{:+,.2f} ₺", "Fark ($)": "{:+,.2f} $", "Getiri (%)": "{:+.2f} %"
-            }).map(renk, subset=["Fark (TL)", "Getiri (%)"]), use_container_width=True)
-        else:
-            st.info("Henüz yeterli geçmiş veri birikmedi. Yarın burası dolmaya başlayacak.")
-    else:
-        st.info("İlk kayıt oluşturuldu! Yarın değişimleri görebileceksiniz.")
+            st.dataframe(pd.DataFrame(degisimler).style.format({"Fark (TL)": "{:+,.2f} ₺", "Fark ($)": "{:+,.2f} $", "Getiri (%)": "{:+.2f} %"}).map(renk, subset=["Fark (TL)", "Getiri (%)"]), use_container_width=True)
+        else: st.info("Yarın değişimler burada görünecek.")
+    else: st.info("Veri toplanıyor...")
 
 # --- TAB 4: GEÇMİŞ ---
-with tab3: # İsmi Gidişat (Tab 3) yaptık, bunu Tab 4 yapalım
+with tab4:
     st.dataframe(df.sort_index(ascending=False), use_container_width=True)
