@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v35")
+st.set_page_config(layout="wide", page_title="Portfoy v36")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -277,26 +277,23 @@ with tab2:
             save_daily_snapshot(toplam_v, toplam_m, dolar)
             
             # KIYASLAMA VERİLERİ
-            alt_usd, alt_gold, _, _ = calculate_benchmarks(df)
+            alt_usd, alt_gold, net_usd_ad, net_gold_ad = calculate_benchmarks(df)
             bench_df = pd.DataFrame({
                 "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
                 "Değer (TL)": [toplam_v, alt_usd, alt_gold],
                 "Renk": ["blue", "green", "gold"]
             })
 
-            # --- GRAFİKLER GERİ GELDİ ---
+            # --- GRAFİKLER (SADELEŞTİ) ---
             col_g1, col_g2 = st.columns(2)
             with col_g1:
-                st.subheader("Varlık Dağılımı")
+                st.subheader("Dağılım")
                 st.plotly_chart(px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4), use_container_width=True)
             with col_g2:
-                st.subheader("Kıyaslama (Benchmark)")
+                st.subheader("Kıyaslama")
                 fig_b = px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s',
                                color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"})
                 st.plotly_chart(fig_b, use_container_width=True)
-            
-            st.subheader("Büyüklük Haritası")
-            st.plotly_chart(px.treemap(df_v, path=['Tur', 'Sembol'], values='Piyasa Değeri'), use_container_width=True)
             
             # Tablo
             cfg = {"Sembol": st.column_config.TextColumn("Varlık"), "Adet": st.column_config.NumberColumn("Adet", format="%.0f"),
@@ -324,7 +321,7 @@ with tab2:
             k1.metric("Portföy", f"{tv:,.0f} ₺", f"${tv/dolar:,.0f}", delta_color="off")
             k2.metric("Maliyet", f"{tm:,.0f} ₺")
             k3.metric("Anlık K/Z", f"{tv-tm:+,.0f} ₺")
-            k4.metric("Ana Para", f"{net_ana:,.0f} ₺", help="Net Giren")
+            k4.metric("Net Ana Para", f"{net_ana:,.0f} ₺", f"${net_usd_ad:,.0f}", delta_color="off")
             k5.metric("GENEL KAR", f"{genel_k:+,.0f} ₺", delta=f"%{genel_ky:.1f}")
 
 # --- TAB 3: ANALİZ VE GİDİŞAT ---
