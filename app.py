@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v36")
+st.set_page_config(layout="wide", page_title="Portfoy v37")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -116,10 +116,10 @@ def get_history_data():
         for c in ["ToplamVarlik", "ToplamMaliyet", "DolarKuru"]:
             if c in df.columns: df[c] = df[c].apply(safe_float)
         df["Tarih"] = pd.to_datetime(df["Tarih"])
-        return df.sort_values("Tarih", ascending=False)
+        return df.sort_values("Tarih", ascending=True) # Grafikler için eskiden yeniye sırala
     except: return pd.DataFrame()
 
-# --- PİYASA VE KIYASLAMA ---
+# --- PİYASA ---
 @st.cache_data(ttl=3600)
 def get_historical_market_data():
     end_date = datetime.now()
@@ -276,7 +276,6 @@ with tab2:
             toplam_m = df_v["Toplam Maliyet"].sum()
             save_daily_snapshot(toplam_v, toplam_m, dolar)
             
-            # KIYASLAMA VERİLERİ
             alt_usd, alt_gold, net_usd_ad, net_gold_ad = calculate_benchmarks(df)
             bench_df = pd.DataFrame({
                 "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
@@ -284,7 +283,6 @@ with tab2:
                 "Renk": ["blue", "green", "gold"]
             })
 
-            # --- GRAFİKLER (SADELEŞTİ) ---
             col_g1, col_g2 = st.columns(2)
             with col_g1:
                 st.subheader("Dağılım")
@@ -295,7 +293,6 @@ with tab2:
                                color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"})
                 st.plotly_chart(fig_b, use_container_width=True)
             
-            # Tablo
             cfg = {"Sembol": st.column_config.TextColumn("Varlık"), "Adet": st.column_config.NumberColumn("Adet", format="%.0f"),
                    "Güncel Fiyat": st.column_config.NumberColumn("Fiyat", format="%.4f"), "Toplam Maliyet": st.column_config.NumberColumn("Maliyet", format="%.2f"),
                    "Tur": None, "Not": None, "Piyasa Değeri": None}
@@ -324,30 +321,39 @@ with tab2:
             k4.metric("Net Ana Para", f"{net_ana:,.0f} ₺", f"${net_usd_ad:,.0f}", delta_color="off")
             k5.metric("GENEL KAR", f"{genel_k:+,.0f} ₺", delta=f"%{genel_ky:.1f}")
 
-# --- TAB 3: ANALİZ VE GİDİŞAT ---
+# --- TAB 3: GİDİŞAT (YENİLENDİ) ---
 with tab3:
-    st.subheader("📈 Performans Karnesi")
+    st.subheader("📈 Gidişat Analizi")
     df_hist = get_history_data()
+    
     if not df_hist.empty:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], mode='lines+markers', name='Portföy', line=dict(color='#2ecc71', width=3)))
-        fig.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], mode='lines', name='Maliyet', line=dict(color='gray', dash='dot')))
-        st.plotly_chart(fig, use_container_width=True)
+        # Net Kar Hesabı (Toplam Varlık - Toplam Maliyet)
+        df_hist["NetKar"] = df_hist["ToplamVarlik"] - df_hist["ToplamMaliyet"]
+        # Günlük Değişim
+        df_hist["GunlukDegisim"] = df_hist["NetKar"].diff().fillna(0)
         
-        bugun_val = df_hist.iloc[0]["ToplamVarlik"]
-        bugun_usd = bugun_val / df_hist.iloc[0]["DolarKuru"]
-        degisimler = []
-        if len(df_hist) > 1:
-            dun_val = df_hist.iloc[1]["ToplamVarlik"]; dun_usd = dun_val / df_hist.iloc[1]["DolarKuru"]
-            degisimler.append({"Periyot": "Dünden Bugüne", "Fark (TL)": bugun_val - dun_val, "Fark ($)": bugun_usd - dun_usd, "Getiri (%)": ((bugun_val - dun_val)/dun_val)*100})
-        if len(df_hist) > 7:
-            hafta_val = df_hist.iloc[7]["ToplamVarlik"]; hafta_usd = hafta_val / df_hist.iloc[7]["DolarKuru"]
-            degisimler.append({"Periyot": "Bu Hafta", "Fark (TL)": bugun_val - hafta_val, "Fark ($)": bugun_usd - hafta_usd, "Getiri (%)": ((bugun_val - hafta_val)/hafta_val)*100})
-        if degisimler:
-            st.dataframe(pd.DataFrame(degisimler).style.format({"Fark (TL)": "{:+,.2f} ₺", "Fark ($)": "{:+,.2f} $", "Getiri (%)": "{:+.2f} %"}).map(renk, subset=["Fark (TL)", "Getiri (%)"]), use_container_width=True)
-        else: st.info("Yarın değişimler burada görünecek.")
+        # 1. Grafik: Toplam Varlık (Zenginleşme)
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], mode='lines+markers', name='Varlık', line=dict(color='#2ecc71', width=3)))
+        fig1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], mode='lines', name='Maliyet', line=dict(color='gray', dash='dot')))
+        fig1.update_layout(title="Varlık Gelişimi (Para Girişi Dahil)", hovermode="x unified")
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        # 2. Grafik: Net Kar (Başarı Göstergesi)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetKar"], mode='lines+markers', name='Net Kar', line=dict(color='#3498db', width=3)))
+        fig2.update_layout(title="Net Kar Gelişimi (Para Girişinden Bağımsız)", hovermode="x unified")
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        # 3. Grafik: Günlük Değişimler (Bar)
+        colors = ['red' if val < 0 else 'green' for val in df_hist["GunlukDegisim"]]
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(x=df_hist["Tarih"], y=df_hist["GunlukDegisim"], marker_color=colors, name="Değişim"))
+        fig3.update_layout(title="Günlük Kar/Zarar Değişimi", hovermode="x unified")
+        st.plotly_chart(fig3, use_container_width=True)
+        
     else: st.info("Veri toplanıyor...")
 
-# --- TAB 4: GEÇMİŞ ---
+# --- TAB 4 ---
 with tab4:
     st.dataframe(df.sort_index(ascending=False), use_container_width=True)
