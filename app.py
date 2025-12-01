@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v38")
+st.set_page_config(layout="wide", page_title="Portfoy v39")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -89,50 +89,21 @@ def get_fund_prices():
         return {str(r[0]): safe_float(r[1]) for r in raw[1:] if len(r) >= 2}
     except: return {}
 
-# --- YENİ: DOĞRU MALİYET HESAPLAMA MOTORU ---
+# --- MALİYET HESAPLAMA MOTORU ---
 def calculate_portfolio_state(df):
-    """
-    İşlemleri tarihe göre sırayla işler.
-    Satış yapıldığında maliyet havuzundan düşer.
-    Adet sıfırlanırsa maliyet de sıfırlanır.
-    """
     portfolio = {}
-    
-    # Tarihe göre sırala (Eskiden yeniye)
     df = df.sort_values("Tarih")
-    
     for _, row in df.iterrows():
-        sym = row["Sembol"]
-        typ = row["Tur"]
-        islem = row["Islem"]
-        qty = row["Adet"]
-        total = row["Toplam"] # Komisyon dahil toplam para
-        
-        if sym not in portfolio:
-            portfolio[sym] = {"Adet": 0, "Maliyet": 0, "Tur": typ}
-            
+        sym = row["Sembol"]; typ = row["Tur"]; islem = row["Islem"]; qty = row["Adet"]; total = row["Toplam"]
+        if sym not in portfolio: portfolio[sym] = {"Adet": 0, "Maliyet": 0, "Tur": typ}
         if islem == "Alış":
-            portfolio[sym]["Adet"] += qty
-            portfolio[sym]["Maliyet"] += total
-        
+            portfolio[sym]["Adet"] += qty; portfolio[sym]["Maliyet"] += total
         elif islem == "Satış":
-            # Satışta maliyet, ortalama fiyattan düşülür
             if portfolio[sym]["Adet"] > 0:
-                avg_cost = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
-                # Satılan kısmın maliyetini havuzdan çıkar
-                portfolio[sym]["Maliyet"] -= (qty * avg_cost)
-                portfolio[sym]["Adet"] -= qty
-            else:
-                # Elde yokken satıldıysa (Hata koruması)
-                portfolio[sym]["Adet"] = 0
-                portfolio[sym]["Maliyet"] = 0
-                
-        # Temizlik: Adet 0 veya altına indiyse maliyeti sıfırla
-        # Bu sayede yeni alımda maliyet tertemiz başlar
-        if portfolio[sym]["Adet"] <= 0.001: # Kuruş hatası payı
-            portfolio[sym]["Adet"] = 0
-            portfolio[sym]["Maliyet"] = 0
-            
+                avg = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
+                portfolio[sym]["Maliyet"] -= (qty * avg); portfolio[sym]["Adet"] -= qty
+            else: portfolio[sym]["Adet"] = 0; portfolio[sym]["Maliyet"] = 0
+        if portfolio[sym]["Adet"] <= 0.001: portfolio[sym]["Adet"] = 0; portfolio[sym]["Maliyet"] = 0
     return portfolio
 
 # --- DİĞER ---
@@ -282,21 +253,16 @@ with tab2:
     if st.button("🔄 Yenile"): st.cache_data.clear(); st.rerun()
     if df.empty: st.info("Veri yok.")
     else:
-        # --- DOĞRU HESAPLAMA ÇAĞRISI ---
-        # Artık eski döngüyü değil, yeni akıllı fonksiyonu kullanıyoruz
         portfolio_state = calculate_portfolio_state(df)
-        
         sheet_fiyat = get_fund_prices()
         dolar = get_usd_rate()
         liste = []
         
-        # Sadece elinde adet kalanları göster
         for sym, data in portfolio_state.items():
             net = data["Adet"]
             if net > 0:
                 em = data["Maliyet"]
                 v_tur = data["Tur"]
-                
                 guncel = 0.0; notlar = ""
                 if v_tur == "Hisse": guncel = get_stock_price(sym)
                 else:
@@ -330,12 +296,33 @@ with tab2:
             tv = 0; tm = 0
             for i, r in edited.iterrows():
                 pd_val = r["Adet"] * safe_float(r["Güncel Fiyat"]); md_val = safe_float(r["Toplam Maliyet"])
+                
+                # --- YENİ HESAPLAMALAR ---
+                # Birim Maliyet = Toplam Maliyet / Adet
+                birim_mal = md_val / r["Adet"] if r["Adet"] > 0 else 0
+                
                 ktl = pd_val - md_val; ky = (ktl/md_val)*100 if md_val > 0 else 0
                 tv += pd_val; tm += md_val
-                res.append({"Varlık": r["Sembol"], "Toplam Maliyet": md_val, "Değer": pd_val, "K/Z (TL)": ktl, "K/Z (%)": ky})
+                
+                # Yeni sütunları ekle
+                res.append({
+                    "Varlık": r["Sembol"], 
+                    "Birim Maliyet": birim_mal, 
+                    "Anlık Fiyat": r["Güncel Fiyat"], 
+                    "Toplam Değer": pd_val, 
+                    "K/Z (TL)": ktl, 
+                    "K/Z (%)": ky
+                })
             
             st.divider()
-            st.dataframe(pd.DataFrame(res).style.format({"Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}", "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"}).map(renk, subset=["K/Z (TL)", "K/Z (%)"]), use_container_width=True, hide_index=True)
+            # GÜNCELLENMİŞ TABLO FORMATI
+            st.dataframe(pd.DataFrame(res).style.format({
+                "Birim Maliyet": "{:,.4f}",
+                "Anlık Fiyat": "{:,.4f}",
+                "Toplam Değer": "{:,.2f}", 
+                "K/Z (TL)": "{:+,.2f}", 
+                "K/Z (%)": "{:+.2f} %"
+            }).map(renk, subset=["K/Z (TL)", "K/Z (%)"]), use_container_width=True, hide_index=True)
             
             st.divider()
             df_al = df[df["Islem"] == "Alış"]; df_sat = df[df["Islem"] == "Satış"]
@@ -354,12 +341,10 @@ with tab3:
     if not df_hist.empty:
         df_hist["NetKar"] = df_hist["ToplamVarlik"] - df_hist["ToplamMaliyet"]
         df_hist["GunlukDegisim"] = df_hist["NetKar"].diff().fillna(0)
-        
         f1 = go.Figure()
         f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name='Varlık', line=dict(color='#2ecc71')))
         f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], name='Maliyet', line=dict(color='gray', dash='dot')))
         st.plotly_chart(f1, use_container_width=True)
-        
         f2 = go.Figure()
         f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetKar"], name='Net Kar', line=dict(color='#3498db')))
         st.plotly_chart(f2, use_container_width=True)
