@@ -9,9 +9,11 @@ from google.oauth2.service_account import Credentials
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v37")
+# --- AYARLAR ---
+st.set_page_config(layout="wide", page_title="Portfoy v38")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -20,13 +22,12 @@ SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- YARDIMCI ---
 def safe_float(val):
     if val is None or val == "": return 0.0
     if isinstance(val, (int, float)): return float(val)
     val_str = str(val).strip()
-    if "." in val_str and "," in val_str:
-        val_str = val_str.replace(".", "")
+    if "." in val_str and "," in val_str: val_str = val_str.replace(".", "")
     val_str = val_str.replace(",", ".")
     try: return float(val_str)
     except: return 0.0
@@ -88,23 +89,64 @@ def get_fund_prices():
         return {str(r[0]): safe_float(r[1]) for r in raw[1:] if len(r) >= 2}
     except: return {}
 
-# --- GEÇMİŞ KAYIT SİSTEMİ ---
-def save_daily_snapshot(toplam_varlik, toplam_maliyet, dolar_kuru):
+# --- YENİ: DOĞRU MALİYET HESAPLAMA MOTORU ---
+def calculate_portfolio_state(df):
+    """
+    İşlemleri tarihe göre sırayla işler.
+    Satış yapıldığında maliyet havuzundan düşer.
+    Adet sıfırlanırsa maliyet de sıfırlanır.
+    """
+    portfolio = {}
+    
+    # Tarihe göre sırala (Eskiden yeniye)
+    df = df.sort_values("Tarih")
+    
+    for _, row in df.iterrows():
+        sym = row["Sembol"]
+        typ = row["Tur"]
+        islem = row["Islem"]
+        qty = row["Adet"]
+        total = row["Toplam"] # Komisyon dahil toplam para
+        
+        if sym not in portfolio:
+            portfolio[sym] = {"Adet": 0, "Maliyet": 0, "Tur": typ}
+            
+        if islem == "Alış":
+            portfolio[sym]["Adet"] += qty
+            portfolio[sym]["Maliyet"] += total
+        
+        elif islem == "Satış":
+            # Satışta maliyet, ortalama fiyattan düşülür
+            if portfolio[sym]["Adet"] > 0:
+                avg_cost = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
+                # Satılan kısmın maliyetini havuzdan çıkar
+                portfolio[sym]["Maliyet"] -= (qty * avg_cost)
+                portfolio[sym]["Adet"] -= qty
+            else:
+                # Elde yokken satıldıysa (Hata koruması)
+                portfolio[sym]["Adet"] = 0
+                portfolio[sym]["Maliyet"] = 0
+                
+        # Temizlik: Adet 0 veya altına indiyse maliyeti sıfırla
+        # Bu sayede yeni alımda maliyet tertemiz başlar
+        if portfolio[sym]["Adet"] <= 0.001: # Kuruş hatası payı
+            portfolio[sym]["Adet"] = 0
+            portfolio[sym]["Maliyet"] = 0
+            
+    return portfolio
+
+# --- DİĞER ---
+def save_daily_snapshot(tv, tm, dk):
     client = init_connection()
     try: sheet = client.open_by_key(SHEET_ID).worksheet("Gecmis")
     except: return
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
-    val_str = str(toplam_varlik).replace(".", ",")
-    mal_str = str(toplam_maliyet).replace(".", ",")
-    kur_str = str(dolar_kuru).replace(".", ",")
-    if bugun not in dates:
-        sheet.append_row([bugun, val_str, mal_str, kur_str])
+    row_data = [bugun, str(tv).replace(".", ","), str(tm).replace(".", ","), str(dk).replace(".", ",")]
+    if bugun not in dates: sheet.append_row(row_data)
     else:
-        row_idx = dates.index(bugun) + 1
-        sheet.update_cell(row_idx, 2, val_str)
-        sheet.update_cell(row_idx, 3, mal_str)
-        sheet.update_cell(row_idx, 4, kur_str)
+        idx = dates.index(bugun) + 1
+        for i, val in enumerate(row_data[1:]): sheet.update_cell(idx, i+2, val)
 
 def get_history_data():
     client = init_connection()
@@ -116,51 +158,46 @@ def get_history_data():
         for c in ["ToplamVarlik", "ToplamMaliyet", "DolarKuru"]:
             if c in df.columns: df[c] = df[c].apply(safe_float)
         df["Tarih"] = pd.to_datetime(df["Tarih"])
-        return df.sort_values("Tarih", ascending=True) # Grafikler için eskiden yeniye sırala
+        return df.sort_values("Tarih", ascending=True)
     except: return pd.DataFrame()
 
-# --- PİYASA ---
 @st.cache_data(ttl=3600)
 def get_historical_market_data():
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365*5)
-    usd_df = yf.download("USDTRY=X", start=start_date, end=end_date, progress=False)
-    if usd_df.empty: return pd.DataFrame()
-    usd_df = usd_df['Close'].reset_index(); usd_df.columns = ['Date', 'USD']; usd_df['Date'] = pd.to_datetime(usd_df['Date']).dt.date
-    gold_df = yf.download("GC=F", start=start_date, end=end_date, progress=False)
-    if gold_df.empty: return pd.DataFrame()
-    gold_df = gold_df['Close'].reset_index(); gold_df.columns = ['Date', 'Gold_Ounce']; gold_df['Date'] = pd.to_datetime(gold_df['Date']).dt.date
-    market = pd.merge(usd_df, gold_df, on='Date', how='outer').sort_values('Date').ffill()
-    market['Gram_Gold'] = (market['Gold_Ounce'] * market['USD']) / 31.1035
-    market.set_index('Date', inplace=True)
-    return market
+    end = datetime.now(); start = end - timedelta(days=365*5)
+    usd = yf.download("USDTRY=X", start=start, end=end, progress=False)
+    gold = yf.download("GC=F", start=start, end=end, progress=False)
+    if usd.empty or gold.empty: return pd.DataFrame()
+    usd = usd['Close'].reset_index(); usd.columns=['Date','USD']; usd['Date']=pd.to_datetime(usd['Date']).dt.date
+    gold = gold['Close'].reset_index(); gold.columns=['Date','Gold_Ounce']; gold['Date']=pd.to_datetime(gold['Date']).dt.date
+    m = pd.merge(usd, gold, on='Date', how='outer').sort_values('Date').ffill()
+    m['Gram_Gold'] = (m['Gold_Ounce']*m['USD'])/31.1035
+    m.set_index('Date', inplace=True)
+    return m
 
 def calculate_benchmarks(df_transactions):
-    market = get_historical_market_data()
-    if market.empty: return 0, 0, 0, 0
-    shadow_usd = 0; shadow_gold = 0
-    df_sorted = df_transactions.sort_values("Tarih")
-    for _, row in df_sorted.iterrows():
-        t_date = row["Tarih"].date(); t_tutar = float(row["Toplam"])
+    m = get_historical_market_data()
+    if m.empty: return 0, 0, 0, 0
+    s_usd = 0; s_gold = 0
+    df_s = df_transactions.sort_values("Tarih")
+    for _, r in df_s.iterrows():
         try:
-            idx = market.index.asof(t_date); day_rates = market.loc[idx]
-            usd = day_rates['USD']; gold = day_rates['Gram_Gold']
+            day = m.loc[m.index.asof(r["Tarih"].date())]
+            u_rate = day['USD']; g_rate = day['Gram_Gold']
+            amt = float(r["Toplam"])
+            if r["Islem"] == "Alış": s_usd+=amt/u_rate; s_gold+=amt/g_rate
+            else: s_usd-=amt/u_rate; s_gold-=amt/g_rate
         except: continue
-        if row["Islem"] == "Alış":
-            shadow_usd += t_tutar / usd; shadow_gold += t_tutar / gold
-        elif row["Islem"] == "Satış":
-            shadow_usd -= t_tutar / usd; shadow_gold -= t_tutar / gold
     try:
-        last = market.iloc[-1]
-        return shadow_usd * last['USD'], shadow_gold * last['Gram_Gold'], shadow_usd, shadow_gold
-    except: return 0, 0, 0, 0
+        last = m.iloc[-1]
+        return s_usd*last['USD'], s_gold*last['Gram_Gold'], s_usd, s_gold
+    except: return 0,0,0,0
 
 @st.cache_data(ttl=300)
 def get_stock_price(symbol):
     try:
-        symbol = symbol.strip().upper()
-        if not symbol.endswith(".IS"): symbol = symbol + ".IS"
-        v = yf.Ticker(symbol).fast_info['last_price']
+        s = symbol.strip().upper()
+        if not s.endswith(".IS"): s += ".IS"
+        v = yf.Ticker(s).fast_info['last_price']
         return v if v is not None else 0.0
     except: return 0.0
 
@@ -169,16 +206,16 @@ def get_usd_rate():
     try: return yf.Ticker("USDTRY=X").fast_info['last_price']
     except: return 1.0
 
-# --- ARAYÜZ ---
+# --- UI ---
 st.title("☁️ Bulut Portföy & Analiz")
 
 def check_password():
     if "password_correct" not in st.session_state:
-        st.text_input("Şifre", type="password", key="password", on_change=password_entered); return False
+        st.text_input("Şifre", type="password", key="pwd", on_change=pwd_entered); return False
     return st.session_state["password_correct"]
-def password_entered():
-    if st.session_state["password"] == st.secrets["app_password"]:
-        st.session_state["password_correct"] = True; del st.session_state["password"]
+def pwd_entered():
+    if st.session_state["pwd"] == st.secrets["app_password"]:
+        st.session_state["password_correct"] = True; del st.session_state["pwd"]
     else: st.session_state["password_correct"] = False
 
 if not check_password(): st.stop()
@@ -189,12 +226,12 @@ except: st.stop()
 
 tab1, tab2, tab3, tab4 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "📈 GİDİŞAT", "📋 GEÇMİŞ"])
 
-# --- TAB 1 ---
 with tab1:
     col_ekle, col_sil = st.columns([2, 1])
     with col_ekle:
-        st.subheader("İşlem")
+        st.subheader("Yeni İşlem")
         metod = st.radio("Yöntem:", ["Birim Fiyat", "Toplam Tutar"], horizontal=True)
+        st.markdown("---")
         with st.form("ekle", clear_on_submit=True):
             c1, c2 = st.columns(2)
             tur = c1.radio("Tür", ["Hisse Senedi", "Yatırım Fonu"], horizontal=True)
@@ -226,16 +263,14 @@ with tab1:
                     
                     yeni = {"Tarih": tarih.strftime("%Y-%m-%d"), "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
                             "Islem": yon, "Sembol": kod, "Adet": adet, "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam}
-                    
                     with st.spinner("Kaydediliyor..."):
-                        save_transaction(yeni)
-                        st.success("Tamam!"); st.cache_data.clear(); st.rerun()
+                        save_transaction(yeni); st.success("Tamam!"); st.cache_data.clear(); st.rerun()
     with col_sil:
         st.subheader("Sil")
         try:
             df_sil = get_data()
             if not df_sil.empty:
-                st.dataframe(df_sil.tail(5)[["Sembol", "Toplam"]], use_container_width=True)
+                st.dataframe(df_sil.tail(5)[["Sembol", "Islem", "Toplam"]], use_container_width=True)
                 secilen = st.selectbox("ID:", df_sil.index.sort_values(ascending=False))
                 if st.button("Sil"):
                     client = init_connection()
@@ -243,58 +278,51 @@ with tab1:
                     st.success("Silindi!"); st.cache_data.clear(); st.rerun()
         except: pass
 
-# --- TAB 2 ---
 with tab2:
     if st.button("🔄 Yenile"): st.cache_data.clear(); st.rerun()
     if df.empty: st.info("Veri yok.")
     else:
+        # --- DOĞRU HESAPLAMA ÇAĞRISI ---
+        # Artık eski döngüyü değil, yeni akıllı fonksiyonu kullanıyoruz
+        portfolio_state = calculate_portfolio_state(df)
+        
         sheet_fiyat = get_fund_prices()
         dolar = get_usd_rate()
-        semboller = df["Sembol"].unique(); liste = []
+        liste = []
         
-        for s in semboller:
-            txs = df[df["Sembol"] == s]
-            if txs.empty: continue
-            v_tur = txs.iloc[0]["Tur"]
-            alis = txs[txs["Islem"] == "Alış"]; satis = txs[txs["Islem"] == "Satış"]
-            net = alis["Adet"].sum() - satis["Adet"].sum()
+        # Sadece elinde adet kalanları göster
+        for sym, data in portfolio_state.items():
+            net = data["Adet"]
             if net > 0:
-                tm = (alis["Adet"] * alis["Fiyat"]).sum() + alis["Komisyon"].sum()
-                om = tm / alis["Adet"].sum()
-                em = om * net
+                em = data["Maliyet"]
+                v_tur = data["Tur"]
+                
                 guncel = 0.0; notlar = ""
-                if v_tur == "Hisse": guncel = get_stock_price(s)
+                if v_tur == "Hisse": guncel = get_stock_price(sym)
                 else:
-                    guncel = float(sheet_fiyat.get(s, 0))
-                    if guncel == 0: guncel = om; notlar = "⚠️"
-                liste.append({"Sembol": s, "Tur": v_tur, "Adet": net, "Not": notlar, 
+                    guncel = float(sheet_fiyat.get(sym, 0))
+                    if guncel == 0: guncel = em / net; notlar = "⚠️"
+                
+                liste.append({"Sembol": sym, "Tur": v_tur, "Adet": net, "Not": notlar, 
                               "Toplam Maliyet": float(em), "Güncel Fiyat": float(guncel), "Piyasa Değeri": float(net * guncel)})
         
         if liste:
             df_v = pd.DataFrame(liste)
-            toplam_v = df_v["Piyasa Değeri"].sum()
-            toplam_m = df_v["Toplam Maliyet"].sum()
+            toplam_v = df_v["Piyasa Değeri"].sum(); toplam_m = df_v["Toplam Maliyet"].sum()
             save_daily_snapshot(toplam_v, toplam_m, dolar)
             
             alt_usd, alt_gold, net_usd_ad, net_gold_ad = calculate_benchmarks(df)
             bench_df = pd.DataFrame({
                 "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
-                "Değer (TL)": [toplam_v, alt_usd, alt_gold],
-                "Renk": ["blue", "green", "gold"]
+                "Değer (TL)": [toplam_v, alt_usd, alt_gold], "Renk": ["blue", "green", "gold"]
             })
 
             col_g1, col_g2 = st.columns(2)
-            with col_g1:
-                st.subheader("Dağılım")
-                st.plotly_chart(px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4), use_container_width=True)
-            with col_g2:
-                st.subheader("Kıyaslama")
-                fig_b = px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s',
-                               color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"})
-                st.plotly_chart(fig_b, use_container_width=True)
+            with col_g1: st.plotly_chart(px.pie(df_v, values='Piyasa Değeri', names='Sembol', hole=0.4), use_container_width=True)
+            with col_g2: st.plotly_chart(px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s', color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}), use_container_width=True)
             
-            cfg = {"Sembol": st.column_config.TextColumn("Varlık"), "Adet": st.column_config.NumberColumn("Adet", format="%.0f"),
-                   "Güncel Fiyat": st.column_config.NumberColumn("Fiyat", format="%.4f"), "Toplam Maliyet": st.column_config.NumberColumn("Maliyet", format="%.2f"),
+            cfg = {"Sembol": st.column_config.TextColumn("Varlık", disabled=True), "Adet": st.column_config.NumberColumn("Adet", format="%.0f", disabled=True),
+                   "Güncel Fiyat": st.column_config.NumberColumn("Fiyat", format="%.4f"), "Toplam Maliyet": st.column_config.NumberColumn("Maliyet", format="%.2f", disabled=True),
                    "Tur": None, "Not": None, "Piyasa Değeri": None}
             edited = st.data_editor(df_v, column_config=cfg, use_container_width=True, hide_index=True, key="gs_edit")
             
@@ -306,14 +334,13 @@ with tab2:
                 tv += pd_val; tm += md_val
                 res.append({"Varlık": r["Sembol"], "Toplam Maliyet": md_val, "Değer": pd_val, "K/Z (TL)": ktl, "K/Z (%)": ky})
             
-            st.dataframe(pd.DataFrame(res).style.format({"Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}", "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"})
-                         .map(renk, subset=["K/Z (TL)", "K/Z (%)"]), use_container_width=True, hide_index=True)
+            st.divider()
+            st.dataframe(pd.DataFrame(res).style.format({"Toplam Maliyet": "{:,.2f}", "Değer": "{:,.2f}", "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"}).map(renk, subset=["K/Z (TL)", "K/Z (%)"]), use_container_width=True, hide_index=True)
             
             st.divider()
             df_al = df[df["Islem"] == "Alış"]; df_sat = df[df["Islem"] == "Satış"]
             net_ana = df_al["Toplam"].sum() - df_sat["Toplam"].sum()
             genel_k = tv - net_ana; genel_ky = (genel_k/net_ana)*100 if net_ana > 0 else 0
-            
             k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Portföy", f"{tv:,.0f} ₺", f"${tv/dolar:,.0f}", delta_color="off")
             k2.metric("Maliyet", f"{tm:,.0f} ₺")
@@ -321,39 +348,22 @@ with tab2:
             k4.metric("Net Ana Para", f"{net_ana:,.0f} ₺", f"${net_usd_ad:,.0f}", delta_color="off")
             k5.metric("GENEL KAR", f"{genel_k:+,.0f} ₺", delta=f"%{genel_ky:.1f}")
 
-# --- TAB 3: GİDİŞAT (YENİLENDİ) ---
 with tab3:
-    st.subheader("📈 Gidişat Analizi")
+    st.subheader("📈 Gidişat")
     df_hist = get_history_data()
-    
     if not df_hist.empty:
-        # Net Kar Hesabı (Toplam Varlık - Toplam Maliyet)
         df_hist["NetKar"] = df_hist["ToplamVarlik"] - df_hist["ToplamMaliyet"]
-        # Günlük Değişim
         df_hist["GunlukDegisim"] = df_hist["NetKar"].diff().fillna(0)
         
-        # 1. Grafik: Toplam Varlık (Zenginleşme)
-        fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], mode='lines+markers', name='Varlık', line=dict(color='#2ecc71', width=3)))
-        fig1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], mode='lines', name='Maliyet', line=dict(color='gray', dash='dot')))
-        fig1.update_layout(title="Varlık Gelişimi (Para Girişi Dahil)", hovermode="x unified")
-        st.plotly_chart(fig1, use_container_width=True)
+        f1 = go.Figure()
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name='Varlık', line=dict(color='#2ecc71')))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamMaliyet"], name='Maliyet', line=dict(color='gray', dash='dot')))
+        st.plotly_chart(f1, use_container_width=True)
         
-        # 2. Grafik: Net Kar (Başarı Göstergesi)
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetKar"], mode='lines+markers', name='Net Kar', line=dict(color='#3498db', width=3)))
-        fig2.update_layout(title="Net Kar Gelişimi (Para Girişinden Bağımsız)", hovermode="x unified")
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        # 3. Grafik: Günlük Değişimler (Bar)
-        colors = ['red' if val < 0 else 'green' for val in df_hist["GunlukDegisim"]]
-        fig3 = go.Figure()
-        fig3.add_trace(go.Bar(x=df_hist["Tarih"], y=df_hist["GunlukDegisim"], marker_color=colors, name="Değişim"))
-        fig3.update_layout(title="Günlük Kar/Zarar Değişimi", hovermode="x unified")
-        st.plotly_chart(fig3, use_container_width=True)
-        
+        f2 = go.Figure()
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetKar"], name='Net Kar', line=dict(color='#3498db')))
+        st.plotly_chart(f2, use_container_width=True)
     else: st.info("Veri toplanıyor...")
 
-# --- TAB 4 ---
 with tab4:
-    st.dataframe(df.sort_index(ascending=False), use_container_width=True)
+    st.dataframe(df.sort_index(ascending=False).style.format({"Fiyat": "{:,.4f}", "Toplam": "{:,.2f}", "Komisyon": "{:,.2f}", "Adet": "{:.0f}"}), use_container_width=True)
