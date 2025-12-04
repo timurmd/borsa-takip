@@ -9,9 +9,11 @@ from google.oauth2.service_account import Credentials
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Uyarıları sustur
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v41")
+# --- AYARLAR ---
+st.set_page_config(layout="wide", page_title="Portfoy v42")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -30,7 +32,7 @@ def safe_float(val):
     try: return float(val_str)
     except: return 0.0
 
-# --- RENKLENDİRME (GÜNCELLENDİ: Metinleri de boyar) ---
+# --- RENKLENDİRME ---
 def renk(val):
     c = ''
     # Sayısal kontrol
@@ -218,6 +220,7 @@ with tab1:
     with col_ekle:
         st.subheader("Yeni İşlem")
         metod = st.radio("Yöntem:", ["Birim Fiyat", "Toplam Tutar"], horizontal=True)
+        st.markdown("---")
         with st.form("ekle", clear_on_submit=True):
             c1, c2 = st.columns(2)
             tur = c1.radio("Tür", ["Hisse Senedi", "Yatırım Fonu"], horizontal=True)
@@ -284,24 +287,22 @@ with tab2:
                     guncel = curr_p
                     if curr_p is None: guncel = 0
                     if prev_p is None: prev_p = 0
-                    ref_fiyat = prev_p # Dünkü kapanış
+                    ref_fiyat = prev_p
                 else:
                     f_info = fund_data.get(sym, {"fiyat": 0, "yuzde": 0})
                     guncel = f_info["fiyat"]
                     pct = f_info["yuzde"]
-                    
                     if guncel == 0: 
                         guncel = em / net
-                        ref_fiyat = guncel # Değişim 0 görünsün
+                        ref_fiyat = guncel
                     else:
-                        # Dünkü Fiyat = Bugün / (1 + %/100)
                         ref_fiyat = guncel / (1 + (pct/100))
                 
                 liste.append({
                     "Sembol": sym, "Tur": v_tur, "Adet": net, 
                     "Birim Maliyet": em / net,
                     "Anlık Fiyat": float(guncel),
-                    "Ref Fiyat": float(ref_fiyat), # Gizli referans fiyat
+                    "Ref Fiyat": float(ref_fiyat),
                     "Toplam Değer": float(net * guncel),
                     "K/Z (TL)": float((net * guncel) - em),
                     "K/Z (%)": float(((net * guncel) - em) / em * 100) if em > 0 else 0
@@ -310,7 +311,9 @@ with tab2:
         if liste:
             df_v = pd.DataFrame(liste)
             toplam_v = df_v["Toplam Değer"].sum()
+            # Toplam Maliyeti Gösterge için buradan hesapla
             toplam_m_gosterge = sum([x["Birim Maliyet"] * x["Adet"] for x in liste])
+            
             save_daily_snapshot(toplam_v, toplam_m_gosterge, dolar)
             
             alt_usd, alt_gold, net_usd_ad, net_gold_ad = calculate_benchmarks(df)
@@ -330,7 +333,6 @@ with tab2:
                 "Toplam Değer": st.column_config.NumberColumn("Toplam Değer", format="%.2f", disabled=True),
                 "K/Z (TL)": st.column_config.NumberColumn("Kar/Zarar", format="%.2f", disabled=True),
                 "K/Z (%)": st.column_config.NumberColumn("Kar %", format="%.2f", disabled=True),
-                # Birleşik Sütun (Metin)
                 "G.Fark (Metin)": st.column_config.TextColumn("Günlük Fark", disabled=True),
                 "Tur": None, "Adet": None, "Ref Fiyat": None
             }
@@ -345,46 +347,40 @@ with tab2:
                 pd_val = r["Adet"] * guncel
                 md_val = r["Birim Maliyet"] * r["Adet"]
                 
-                # Kar Zarar
                 ktl = pd_val - md_val
                 ky = (ktl/md_val)*100 if md_val > 0 else 0
                 
-                # Günlük Fark
                 ref = r["Ref Fiyat"]
                 gf_tl = (guncel - ref) * r["Adet"]
                 gf_yuzde = ((guncel - ref) / ref) * 100 if ref > 0 else 0
-                
-                # Birleşik Metin Oluşturma: "+1.250,00 (%+3,50)"
-                # Not: format fonksiyonu ile virgül/nokta ayarı yapıyoruz
                 gf_metin = f"{gf_tl:+,.2f} (%{gf_yuzde:+.2f})"
                 
                 tv += pd_val; tm += md_val; tgf += gf_tl
                 
                 res.append({
-                    "Varlık": r["Sembol"], 
-                    "Birim Maliyet": md_val / r["Adet"],
-                    "Anlık Fiyat": guncel,
-                    "Toplam Değer": pd_val,
-                    "K/Z (TL)": ktl, 
-                    "K/Z (%)": ky,
-                    "G.Fark (Metin)": gf_metin
+                    "Varlık": r["Sembol"], "Birim Maliyet": md_val / r["Adet"],
+                    "Anlık Fiyat": guncel, "Toplam Değer": pd_val,
+                    "K/Z (TL)": ktl, "K/Z (%)": ky, "G.Fark (Metin)": gf_metin
                 })
             
             st.divider()
-            
-            st.dataframe(
-                pd.DataFrame(res).style.format({
-                    "Birim Maliyet": "{:,.4f}", "Anlık Fiyat": "{:,.4f}",
-                    "Toplam Değer": "{:,.2f}", "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
-                }).map(renk, subset=["K/Z (TL)", "K/Z (%)", "G.Fark (Metin)"]),
-                use_container_width=True, hide_index=True
-            )
+            st.dataframe(pd.DataFrame(res).style.format({
+                "Birim Maliyet": "{:,.4f}", "Anlık Fiyat": "{:,.4f}", "Toplam Değer": "{:,.2f}", 
+                "K/Z (TL)": "{:+,.2f}", "K/Z (%)": "{:+.2f} %"
+            }).map(renk, subset=["K/Z (TL)", "K/Z (%)", "G.Fark (Metin)"]), use_container_width=True, hide_index=True)
             
             st.divider()
-            df_al = df[df["Islem"] == "Alış"]; df_sat = df[df["Islem"] == "Satış"]
-            giren = df_alis["Toplam"].sum(); cikan = df_satis["Toplam"].sum()
+            
+            # --- DÜZELTİLEN YER (DEĞİŞKEN İSİMLERİ) ---
+            df_alis = df[df["Islem"] == "Alış"]
+            df_satis = df[df["Islem"] == "Satış"]
+            giren = df_alis["Toplam"].sum()
+            cikan = df_satis["Toplam"].sum()
             net_ana = giren - cikan
-            genel_k = tv - net_ana; genel_ky = (genel_k/net_ana)*100 if net_ana > 0 else 0
+            # ------------------------------------------
+            
+            genel_k = tv - net_ana
+            genel_ky = (genel_k/net_ana)*100 if net_ana > 0 else 0
             
             k1, k2, k3, k4, k5, k6 = st.columns(6)
             k1.metric("Portföy", f"{tv:,.0f} ₺", f"${tv/dolar:,.0f}", delta_color="off")
