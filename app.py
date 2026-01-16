@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v50")
+st.set_page_config(layout="wide", page_title="Portfoy v51")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -119,7 +119,7 @@ def save_daily_snapshot(tv, tm, dk, net_ana):
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
     
-    # Gerekli verileri kaydet
+    # 5 Sütun: Tarih, Varlık, PortföyMaliyeti, Dolar, NetAnaPara
     d = [bugun, str(tv).replace(".", ","), str(tm).replace(".", ","), str(dk).replace(".", ","), str(net_ana).replace(".", ",")]
     
     if bugun not in dates: sheet.append_row(d)
@@ -155,23 +155,21 @@ def get_historical_market_data():
     m.set_index('Date', inplace=True)
     return m
 
-def calculate_benchmarks(df_transactions):
+# NET ANA PARANIN DOLAR KARŞILIĞINI HESAPLA (TARİHSEL GİRİŞ/ÇIKIŞ)
+def calculate_net_usd_cost(df_transactions):
     m = get_historical_market_data()
-    if m.empty: return 0, 0, 0, 0
-    s_usd = 0; s_gold = 0
+    if m.empty: return 0
+    net_usd_cost = 0
     df_s = df_transactions.sort_values("Tarih")
     for _, r in df_s.iterrows():
         try:
             day = m.loc[m.index.asof(r["Tarih"].date())]
-            usd = day['USD']; gold = day['Gram_Gold']
+            usd_rate = day['USD']
             amt = float(r["Toplam"])
-            if r["Islem"] == "Alış": s_usd+=amt/usd; s_gold+=amt/gold
-            else: s_usd-=amt/usd; s_gold-=amt/gold
+            if r["Islem"] == "Alış": net_usd_cost += amt / usd_rate
+            else: net_usd_cost -= amt / usd_rate
         except: continue
-    try:
-        last = m.iloc[-1]
-        return s_usd*last['USD'], s_gold*last['Gram_Gold'], s_usd, s_gold
-    except: return 0,0,0,0
+    return net_usd_cost
 
 @st.cache_data(ttl=300)
 def get_stock_data_full(symbol):
@@ -194,7 +192,6 @@ def calculate_portfolio_unified(df):
     
     toplam_giren = 0
     toplam_cikan = 0
-    realize_kar_toplam = 0
     
     for _, row in df.iterrows():
         sym = row["Sembol"]; typ = row["Tur"]; islem = row["Islem"]; qty = row["Adet"]; total = row["Toplam"]
@@ -212,11 +209,6 @@ def calculate_portfolio_unified(df):
             if portfolio[sym]["Adet"] > 0:
                 avg_cost = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
                 
-                # Realize Kar Hesabı
-                satis_fiyati = total / qty
-                tekil_kar = (satis_fiyati - avg_cost) * qty
-                realize_kar_toplam += tekil_kar
-                
                 portfolio[sym]["Maliyet"] -= (qty * avg_cost)
                 portfolio[sym]["Adet"] -= qty
                 portfolio[sym]["NetGiris"] -= total 
@@ -226,7 +218,7 @@ def calculate_portfolio_unified(df):
         if portfolio[sym]["Adet"] <= 0.001: 
             portfolio[sym]["Adet"] = 0; portfolio[sym]["Maliyet"] = 0; portfolio[sym]["NetGiris"] = 0
             
-    return portfolio, toplam_giren, toplam_cikan, realize_kar_toplam
+    return portfolio, toplam_giren, toplam_cikan
 
 # --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy & Analiz")
@@ -302,11 +294,14 @@ with tab2:
     if st.button("🔄 Yenile"): st.cache_data.clear(); st.rerun()
     if df.empty: st.info("Veri yok.")
     else:
-        portfolio, t_giren, t_cikan, realize_kar_toplam = calculate_portfolio_unified(df)
+        portfolio, t_giren, t_cikan = calculate_portfolio_unified(df)
         fund_data = get_fund_data_from_sheet()
         dolar = get_usd_rate()
         
-        net_ana_para_tl = t_giren - t_cikan # İçerideki Net Para
+        # Ana Para Hesabı
+        net_ana_para_tl = t_giren - t_cikan
+        # TARİHSEL DOLAR MALİYETİ
+        net_ana_para_usd_maliyeti = calculate_net_usd_cost(df)
         
         liste = []
         gunluk_toplam_tl = 0
@@ -318,7 +313,6 @@ with tab2:
                 v_tur = data["Tur"]
                 risk_kalan = data["NetGiris"]
                 
-                # Fiyat
                 guncel = 0.0; ref_fiyat = 0.0
                 if v_tur == "Hisse":
                     curr_p, prev_p = get_stock_data_full(sym)
@@ -331,7 +325,6 @@ with tab2:
                     if guncel == 0: guncel = em / net; ref_fiyat = guncel
                     else: ref_fiyat = guncel / (1 + (pct/100))
                 
-                # Hesaplamalar
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
                 gf_metin = f"{gf_tl:+,.2f} (%{gf_yuzde:+.2f})" # Detaylı format
@@ -341,10 +334,10 @@ with tab2:
 
                 liste.append({
                     "Varlık": sym, 
-                    "Lot": net, # YENİ SÜTUN
+                    "Lot": net, # İSTEDİĞİNİZ LOT SÜTUNU
                     "Ort. Maliyet": em / net,
                     "Anlık Fiyat": guncel,
-                    "Kalan Risk (TL)": maliyet_durumu, # YENİ SÜTUN (Sıfır Maliyet)
+                    "Kalan Risk (TL)": maliyet_durumu, # İSTEDİĞİNİZ RİSK SÜTUNU
                     "Toplam Değer": float(net * guncel),
                     "K/Z (TL)": float((net * guncel) - em),
                     "K/Z (%)": float(((net * guncel) - em) / em * 100) if em > 0 else 0,
@@ -358,27 +351,31 @@ with tab2:
             
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl)
             
+            # GENEL KAR (0. Günden beri)
             genel_kar = toplam_portfoy_degeri - net_ana_para_tl
+            genel_ky = (genel_kar / net_ana_para_tl)*100 if net_ana_para_tl > 0 else 0
             
-            alt_usd, alt_gold, _, _ = calculate_benchmarks(df)
-            bench_df = pd.DataFrame({
-                "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
-                "Değer (TL)": [toplam_portfoy_degeri, alt_usd, alt_gold], "Renk": ["blue", "green", "gold"]
-            })
+            # KUTUCUKLAR (ESKİ SİSTEM + YENİ EKLENTİLER)
+            k1, k2, k3, k4, k5, k6 = st.columns(6)
+            k1.metric("Portföy", f"{toplam_portfoy_degeri:,.0f} ₺", f"${toplam_portfoy_degeri/dolar:,.0f}", delta_color="off")
+            k2.metric("Maliyet (Eldeki)", f"{toplam_maliyet:,.0f} ₺")
+            k3.metric("Anlık K/Z (Eldeki)", f"{toplam_portfoy_degeri-toplam_maliyet:+,.0f} ₺") 
+            k4.metric("Günlük Fark", f"{gunluk_toplam_tl:+,.0f} ₺")
+            
+            # İSTEDİĞİNİZ DOLAR MALİYETİ BURAYA GELDİ
+            k5.metric("Net Ana Para", f"{net_ana_para_tl:,.0f} ₺", f"Maliyet: ${net_ana_para_usd_maliyeti:,.0f}", delta_color="off")
+            
+            # İSTEDİĞİNİZ 0. GÜNDEN BERİ KAR
+            k6.metric("GENEL KAR", f"{genel_kar:+,.0f} ₺", f"%{genel_ky:.1f} (Tüm Zamanlar)")
 
-            # Grafikler
-            c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df_v, values='Toplam Değer', names='Varlık', hole=0.4), use_container_width=True)
-            with c2: st.plotly_chart(px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s', color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}), use_container_width=True)
-            
-            # --- ANA TABLO (KLASİK + LOT + SIFIR MALİYET) ---
+            st.divider()
+
+            # TABLO
             st.subheader("📋 Portföy Detayı")
-            
-            # Formatlama Fonksiyonu
             def format_risk(val):
-                if isinstance(val, (int, float)): return f"{val:,.2f}" # Kuruşlu
-                return val # BEDAVA yazısı
-
+                if isinstance(val, (int, float)): return f"{val:,.2f}"
+                return val
+            
             cfg = {
                 "Varlık": st.column_config.TextColumn("Varlık", disabled=True),
                 "Lot": st.column_config.NumberColumn("Lot", format="%.0f"),
@@ -397,42 +394,32 @@ with tab2:
             }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark", "Kalan Risk (TL)"]), 
             use_container_width=True, hide_index=True, column_config=cfg)
 
-            st.divider()
-            
-            # --- ÖZET KUTUCUKLARI (HATA DÜZELTİLDİ: Realize Kar) ---
-            k1, k2, k3, k4, k5, k6 = st.columns(6)
-            k1.metric("Portföy", f"{toplam_portfoy_degeri:,.0f} ₺", f"${toplam_portfoy_degeri/dolar:,.0f}", delta_color="off")
-            k2.metric("Maliyet", f"{toplam_maliyet:,.0f} ₺")
-            k3.metric("Anlık K/Z", f"{toplam_portfoy_degeri-toplam_maliyet:+,.0f} ₺") 
-            k4.metric("Günlük Fark", f"{gunluk_toplam_tl:+,.0f} ₺")
-            k5.metric("Net Ana Para", f"{net_ana_para_tl:,.0f} ₺", help="İçerideki riskli para")
-            k6.metric("REALİZE KÂR", f"{realize_kar_toplam:+,.0f} ₺", help="Satışlardan cebe giren net kâr")
-
 with tab3:
     st.subheader("📈 Gidişat")
     df_hist = get_history_data()
     if not df_hist.empty:
-        # GENEL KAR: Toplam Varlık - Net Ana Para (Dışarıdaki para dahil başarı)
+        # HESAPLAMALAR
         if "NetAnaPara" in df_hist.columns:
              df_hist["GenelKar"] = df_hist["ToplamVarlik"] - df_hist["NetAnaPara"]
         else: df_hist["GenelKar"] = 0
         
-        # ANLIK KAR: Toplam Varlık - Portföy Maliyeti (Sadece eldekilerin başarısı)
         if "ToplamMaliyet" in df_hist.columns:
             df_hist["AnlikKar"] = df_hist["ToplamVarlik"] - df_hist["ToplamMaliyet"]
         else: df_hist["AnlikKar"] = 0
         
-        # Grafik 1: Servet vs Risk
+        # GRAFİK 1: VARLIK ve ANA PARA (İSTEDİĞİNİZ GİBİ AYRI)
         f1 = go.Figure()
-        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name='Portföy Değeri', line=dict(color='#2ecc71', width=3)))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name='Toplam Servet', line=dict(color='#2ecc71', width=3)))
         if "NetAnaPara" in df_hist.columns:
-            f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name='İçerideki Risk', line=dict(color='gray', dash='dot')))
-        f1.update_layout(title="Varlık vs Risk", hovermode="x unified")
+            f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name='İçerideki Ana Para', line=dict(color='gray', dash='dot')))
+        f1.update_layout(title="Toplam Varlık vs Ana Para", hovermode="x unified")
         st.plotly_chart(f1, use_container_width=True)
         
-        # Grafik 2: İKİ TÜR KAR
+        st.divider()
+        
+        # GRAFİK 2: İKİ TÜR KAR (ALT ALTA)
         f2 = go.Figure()
-        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name='GENEL KÂR (Cepteki Dahil)', line=dict(color='#3498db', width=3)))
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name='GENEL KÂR (0. Günden Beri)', line=dict(color='#3498db', width=3)))
         f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"], name='ANLIK KÂR (Sadece Eldekiler)', line=dict(color='#f1c40f', width=2, dash='dash')))
         f2.update_layout(title="Kâr Analizi: Genel vs Anlık", hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
