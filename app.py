@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v48")
+st.set_page_config(layout="wide", page_title="Portfoy v49")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -185,30 +185,51 @@ def get_usd_rate():
     try: return yf.Ticker("USDTRY=X").fast_info['last_price']
     except: return 1.0
 
+# --- PORTFÖY VE REALIZE KAR HESABI ---
 def calculate_portfolio_unified(df):
     portfolio = {}
     df = df.sort_values("Tarih")
-    toplam_giren = 0; toplam_cikan = 0
+    
+    toplam_giren = 0
+    toplam_cikan = 0
+    
+    # REALIZE KAR HESABI (Satılan malların karı)
+    realize_kar = 0
+    
     for _, row in df.iterrows():
         sym = row["Sembol"]; typ = row["Tur"]; islem = row["Islem"]; qty = row["Adet"]; total = row["Toplam"]
+        
         if islem == "Alış": toplam_giren += total
         else: toplam_cikan += total
+
         if sym not in portfolio: portfolio[sym] = {"Adet": 0, "Maliyet": 0, "NetGiris": 0.0, "Tur": typ}
+        
         if islem == "Alış":
             portfolio[sym]["Adet"] += qty
             portfolio[sym]["Maliyet"] += total 
             portfolio[sym]["NetGiris"] += total 
         elif islem == "Satış":
             if portfolio[sym]["Adet"] > 0:
-                avg = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
-                portfolio[sym]["Maliyet"] -= (qty * avg)
+                # Satış anında maliyet nedir?
+                avg_cost = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
+                
+                # REALIZE KAR: (Satış Fiyatı - Alış Maliyeti) * Adet
+                # Satış Fiyatı = total / qty
+                satis_fiyati = total / qty
+                tekil_kar = (satis_fiyati - avg_cost) * qty
+                realize_kar += tekil_kar
+                
+                # Stoktan düş
+                portfolio[sym]["Maliyet"] -= (qty * avg_cost)
                 portfolio[sym]["Adet"] -= qty
                 portfolio[sym]["NetGiris"] -= total 
             else:
                 portfolio[sym]["Adet"] = 0; portfolio[sym]["Maliyet"] = 0; portfolio[sym]["NetGiris"] = 0
+                
         if portfolio[sym]["Adet"] <= 0.001: 
             portfolio[sym]["Adet"] = 0; portfolio[sym]["Maliyet"] = 0; portfolio[sym]["NetGiris"] = 0
-    return portfolio, toplam_giren, toplam_cikan
+            
+    return portfolio, toplam_giren, toplam_cikan, realize_kar
 
 # --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy & Analiz")
@@ -284,7 +305,8 @@ with tab2:
     if st.button("🔄 Yenile"): st.cache_data.clear(); st.rerun()
     if df.empty: st.info("Veri yok.")
     else:
-        portfolio, t_giren, t_cikan = calculate_portfolio_unified(df)
+        # ANA HESAPLAMA ÇAĞRISI (realize_kar eklendi)
+        portfolio, t_giren, t_cikan, realize_kar_toplam = calculate_portfolio_unified(df)
         fund_data = get_fund_data_from_sheet()
         dolar = get_usd_rate()
         
@@ -333,13 +355,16 @@ with tab2:
             c1, c2, c3 = st.columns(3)
             c1.metric("💰 Portföy Değeri", f"{toplam_portfoy_degeri:,.0f} ₺", f"${toplam_portfoy_degeri/dolar:,.0f}")
             c2.metric("📊 Toplam Maliyet", f"{toplam_maliyet:,.0f} ₺")
-            c3.metric("📈 Genel Kâr", f"{genel_kar:+,.0f} ₺")
+            c3.metric("📈 Genel Kâr (Tüm Zamanlar)", f"{genel_kar:+,.0f} ₺")
             st.divider()
             
             k1, k2, k3 = st.columns(3)
             usd_cost_str = f"${net_ana_para_usd_maliyeti:,.0f}" if net_ana_para_tl > 0 else "RİSKSİZ"
             k1.metric("🛡️ İçerideki Risk", f"{net_ana_para_tl:,.0f} ₺", f"Maliyet: {usd_cost_str}")
-            k2.metric("💸 Çekilen Nakit", f"{t_cikan:,.0f} ₺")
+            
+            # BURASI DEĞİŞTİ: "Çekilen Nakit" (Ciro) Yerine "Realize Kar" (Net Kar)
+            k2.metric("💵 Cepteki Kâr (Realize)", f"{realize_kar_toplam:+,.0f} ₺", help="Satışlardan elde ettiğiniz net kâr. (Alış-Satış farkı)")
+            
             k3.metric("📅 Bugün", f"{gunluk_toplam_tl:+,.0f} ₺")
             st.divider()
 
@@ -377,7 +402,7 @@ with tab3:
         st.plotly_chart(f1, use_container_width=True)
         
         f2 = go.Figure()
-        # DÜZELTİLEN SATIR: fill='tozeroy' ARTIK DOĞRU YERDE
+        # DÜZELTİLEN SATIR: fill='tozeroy' ANA ÖZELLİK OLARAK KALDI
         f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name='NET SERVET KAZANCI', line=dict(color='#3498db', width=3), fill='tozeroy'))
         f2.update_layout(title="Toplam Kazanılan Servet", hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
