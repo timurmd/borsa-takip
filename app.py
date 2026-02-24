@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v53")
+st.set_page_config(layout="wide", page_title="Portfoy v54")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -108,10 +108,8 @@ def get_fund_data_from_sheet():
     except: return {}
 
 def save_daily_snapshot(tv, tm, dk, net_ana):
-    # ÇÖKÜŞ KORUMASI: Varlık 0 iken maliyet 1000'den büyükse muhtemelen API hatasıdır, kaydetme.
     if tv < 100 and tm > 1000:
-        return
-
+        return # Çöküş koruması
     client = init_connection()
     try: 
         try: sheet = client.open_by_key(SHEET_ID).worksheet("Gecmis")
@@ -120,7 +118,6 @@ def save_daily_snapshot(tv, tm, dk, net_ana):
             sheet.append_row(["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara"])
     except: return
 
-    # SÜTUN BAŞLIKLARINI OTOMATİK ONAR (Kullanıcı manuel silmek zorunda kalmasın)
     expected_header = ["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara"]
     current_header = sheet.row_values(1)
     if current_header != expected_header:
@@ -145,7 +142,6 @@ def get_history_data():
         if len(raw) < 2: return pd.DataFrame()
         
         actual_cols = raw[0]
-        # Eksik sütunları 0 ile doldurup veri çerçevesini güvenli oluştur
         valid_data = []
         for r in raw[1:]:
             r_padded = r + ["0"] * (len(actual_cols) - len(r))
@@ -174,6 +170,25 @@ def get_historical_market_data():
     m['Gram_Gold'] = (m['Gold_Ounce']*m['USD'])/31.1035
     m.set_index('Date', inplace=True)
     return m
+
+# --- EKSİK FONKSİYON EKLENDİ ---
+def calculate_benchmarks(df_transactions):
+    m = get_historical_market_data()
+    if m.empty: return 0, 0, 0, 0
+    s_usd = 0; s_gold = 0
+    df_s = df_transactions.sort_values("Tarih")
+    for _, r in df_s.iterrows():
+        try:
+            day = m.loc[m.index.asof(r["Tarih"].date())]
+            usd = day['USD']; gold = day['Gram_Gold']
+            amt = float(r["Toplam"])
+            if r["Islem"] == "Alış": s_usd+=amt/usd; s_gold+=amt/gold
+            else: s_usd-=amt/usd; s_gold-=amt/gold
+        except: continue
+    try:
+        last = m.iloc[-1]
+        return s_usd*last['USD'], s_gold*last['Gram_Gold'], s_usd, s_gold
+    except: return 0,0,0,0
 
 def calculate_net_usd_cost(df_transactions):
     m = get_historical_market_data()
@@ -369,7 +384,6 @@ with tab2:
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl)
             
             genel_kar = toplam_portfoy_degeri - net_ana_para_tl
-            # ORAN DEĞİŞİKLİĞİ: Sıçramayı önlemek için "Toplam Yatırılan Ana Paraya (t_giren)" göre kâr oranı.
             genel_ky = (genel_kar / t_giren)*100 if t_giren > 0 else 0
             
             alt_usd, alt_gold, _, _ = calculate_benchmarks(df)
@@ -383,8 +397,7 @@ with tab2:
             with c1: st.plotly_chart(px.pie(df_v, values='Toplam Değer', names='Varlık', hole=0.4), use_container_width=True)
             with c2: st.plotly_chart(px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto='.2s', color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}), use_container_width=True)
             
-            # --- GENİŞ KUTUCUK TASARIMI (Rakamlar iç içe girmesin diye) ---
-            # 1. SATIR
+            # --- GENİŞ KUTUCUK TASARIMI ---
             k1, k2, k3 = st.columns(3)
             k1.metric("Portföy Değeri", f"{toplam_portfoy_degeri:,.0f} ₺", f"${toplam_portfoy_degeri/dolar:,.0f}", delta_color="off")
             k2.metric("Maliyet (Eldeki)", f"{toplam_maliyet:,.0f} ₺")
@@ -392,7 +405,6 @@ with tab2:
             
             st.divider()
             
-            # 2. SATIR
             k4, k5, k6 = st.columns(3)
             k4.metric("Günlük Fark", f"{gunluk_toplam_tl:+,.0f} ₺")
             k5.metric("Net Ana Para (Riskli)", f"{net_ana_para_tl:,.0f} ₺", f"Dolar Maliyeti: ${net_ana_para_usd_maliyeti:,.0f}", delta_color="off")
@@ -428,10 +440,7 @@ with tab3:
     st.subheader("📈 Gidişat")
     df_hist = get_history_data()
     if not df_hist.empty:
-        # HESAPLAMALAR
         df_hist["GenelKar"] = df_hist["ToplamVarlik"] - df_hist["NetAnaPara"]
-        
-        # ANLIK KAR (DÜZELTME: Güvenli okuma yapıldı)
         df_hist["AnlikKar"] = df_hist.apply(lambda r: r["ToplamVarlik"] - r["ToplamMaliyet"] if r["ToplamMaliyet"] > 100 else 0, axis=1)
         
         # GRAFİK 1: VARLIK ve ANA PARA
