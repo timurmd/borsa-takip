@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v57")
+st.set_page_config(layout="wide", page_title="Portfoy v58")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -408,7 +408,6 @@ with tab2:
                 vergi_orani = tax_rates.get(sym, 0.0)
                 
                 vergi_tutari = 0.0
-                # Vergi SADECE kâr varsa kesilir
                 if brut_kz > 0 and vergi_orani > 0:
                     vergi_tutari = brut_kz * (vergi_orani / 100.0)
                     toplam_kesilen_vergi += vergi_tutari
@@ -421,7 +420,6 @@ with tab2:
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
                 
-                # Günlük kârın da netleşmesi (Sadece genel olarak kârdaysa)
                 if brut_kz > 0 and gf_tl > 0 and vergi_orani > 0:
                     gf_tl = gf_tl - (gf_tl * (vergi_orani / 100.0))
                 
@@ -466,10 +464,14 @@ with tab2:
             # --- GENİŞ KUTUCUK TASARIMI ---
             st.info(f"💡 Stopaj Düşüldü: Kârda olan varlıklarınızdan güncel fiyat üzerinden hesaplanan toplam **{toplam_kesilen_vergi:,.0f} TL** sanal stopaj vergisi kesilmiş ve değerler NET olarak gösterilmiştir.")
             
+            # --- ANLIK K/Z YÜZDESİ EKLENDİ ---
+            net_anlik_kz = toplam_portfoy_degeri - toplam_maliyet
+            net_anlik_ky = (net_anlik_kz / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
+            
             k1, k2, k3 = st.columns(3)
             k1.metric("Net Portföy (Vergi Düşülmüş)", f"{toplam_portfoy_degeri:,.0f} ₺", f"${toplam_portfoy_degeri/dolar:,.0f}", delta_color="off")
             k2.metric("Maliyet (Eldeki)", f"{toplam_maliyet:,.0f} ₺")
-            k3.metric("Net Anlık K/Z", f"{toplam_portfoy_degeri-toplam_maliyet:+,.0f} ₺") 
+            k3.metric("Net Anlık K/Z", f"{net_anlik_kz:+,.0f} ₺", f"%{net_anlik_ky:.1f} (Maliyete Göre)") 
             
             st.divider()
             
@@ -496,7 +498,7 @@ with tab2:
                 "Net K/Z": st.column_config.NumberColumn("Net K/Z", format="%.0f"),
                 "K/Z (%)": st.column_config.NumberColumn("K/Z (%)", format="%.2f"),
                 "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True),
-                "Ort. Maliyet": None # Gizli tutabiliriz kalabalık olmasın diye
+                "Ort. Maliyet": None
             }
             
             st.dataframe(df_v.style.format({
