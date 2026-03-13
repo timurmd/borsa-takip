@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v59")
+st.set_page_config(layout="wide", page_title="Portfoy v60")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -263,7 +263,7 @@ def get_usd_rate():
     try: return yf.Ticker("USDTRY=X").fast_info['last_price']
     except: return 1.0
 
-# --- ANA HESAPLAMA MOTORU (FIFO ve SÜRE EKLENDİ) ---
+# --- ANA HESAPLAMA MOTORU (FIFO ve SÜRE) ---
 def calculate_portfolio_unified(df):
     portfolio = {}
     df = df.sort_values("Tarih")
@@ -285,7 +285,7 @@ def calculate_portfolio_unified(df):
             portfolio[sym]["Adet"] += qty
             portfolio[sym]["Maliyet"] += total 
             portfolio[sym]["NetGiris"] += total 
-            portfolio[sym]["Alimlar"].append({"adet": qty, "tarih": tarih}) # FIFO için listeye ekle
+            portfolio[sym]["Alimlar"].append({"adet": qty, "tarih": tarih}) 
             
         elif islem == "Satış":
             if portfolio[sym]["Adet"] > 0:
@@ -294,13 +294,12 @@ def calculate_portfolio_unified(df):
                 portfolio[sym]["Adet"] -= qty
                 portfolio[sym]["NetGiris"] -= total 
                 
-                # FIFO (İlk Giren İlk Çıkar) Mantığı: Satılan lotları en eski tarihlerden düş.
                 kalan_satis = qty
                 while kalan_satis > 0 and len(portfolio[sym]["Alimlar"]) > 0:
                     ilk_alim = portfolio[sym]["Alimlar"][0]
                     if ilk_alim["adet"] <= kalan_satis:
                         kalan_satis -= ilk_alim["adet"]
-                        portfolio[sym]["Alimlar"].pop(0) # Bu alım bitti, listeden çıkar
+                        portfolio[sym]["Alimlar"].pop(0) 
                     else:
                         ilk_alim["adet"] -= kalan_satis
                         kalan_satis = 0
@@ -407,11 +406,10 @@ with tab2:
                 risk_kalan = data["NetGiris"]
                 alimlar = data["Alimlar"]
                 
-                # --- ORTALAMA ELDE TUTMA SÜRESİ HESABI (Ağırlıklı Ortalama) ---
                 total_weighted_days = 0
                 for alim in alimlar:
                     gun_farki = (bugun_tarih - alim["tarih"]).days
-                    gun_farki = max(1, gun_farki) # Bugün alınanlar 1 gün sayılsın ki 0'a bölme hatası olmasın
+                    gun_farki = max(1, gun_farki) 
                     total_weighted_days += gun_farki * alim["adet"]
                 
                 ort_gun = int(total_weighted_days / net) if net > 0 else 0
@@ -441,8 +439,6 @@ with tab2:
                 net_deger = brut_deger - vergi_tutari
                 net_kz_yuzde = (net_kz / em) * 100 if em > 0 else 0
                 
-                # --- YILLIK BÜYÜME HIZI HESABI ---
-                # Yüzdelik karı, taşınan güne bölüp 365 ile çarpıyoruz.
                 yillik_hiz = (net_kz_yuzde / ort_gun) * 365 if ort_gun > 0 else 0
 
                 gf_tl = (guncel - ref_fiyat) * net
@@ -458,15 +454,17 @@ with tab2:
                 liste.append({
                     "Varlık": sym, 
                     "Lot": net,
+                    "Ort. Maliyet": em / net,
                     "Fiyat": guncel,
+                    "Vergi %": f"%{vergi_orani}" if vergi_orani > 0 else "-",
+                    "Kesilen Vergi": float(vergi_tutari),
                     "Kalan Risk (TL)": maliyet_durumu,
                     "Net Değer": float(net_deger),
-                    "Ort. Süre": f"{ort_gun} Gün", # YENİ SÜTUN
-                    "Yıllık Hız": float(yillik_hiz), # YENİ SÜTUN
+                    "Ort. Süre": f"{ort_gun} Gün", 
+                    "Yıllık Hız": float(yillik_hiz), 
                     "Net K/Z": float(net_kz),
                     "K/Z (%)": float(net_kz_yuzde),
-                    "Günlük Fark": gf_metin,
-                    "Ort. Maliyet": em / net
+                    "Günlük Fark": gf_metin
                 })
 
         if liste:
@@ -492,8 +490,6 @@ with tab2:
             # --- GENİŞ KUTUCUK TASARIMI ---
             if toplam_kesilen_vergi > 0:
                 st.info(f"💡 Stopaj Düşüldü: Kârda olan varlıklarınızdan toplam **{toplam_kesilen_vergi:,.0f} TL** sanal vergi kesilmiş ve değerler NET olarak gösterilmiştir.")
-            else:
-                st.info("💡 Tablonun en sağındaki 'Yıllık Hız' sütunu, fonun taşıdığınız süre boyunca ne kadar verimli/hızlı çalıştığını gösterir.")
 
             net_anlik_kz = toplam_portfoy_degeri - toplam_maliyet
             net_anlik_ky = (net_anlik_kz / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
@@ -520,19 +516,23 @@ with tab2:
             
             cfg = {
                 "Varlık": st.column_config.TextColumn("Varlık", disabled=True),
-                "Lot": None,
-                "Fiyat": None,
-                "Kalan Risk (TL)": None, # Kalabalık olmasın diye gizleyebiliriz veya açabilirsiniz.
+                "Lot": st.column_config.NumberColumn("Lot", format="%.0f"),
+                "Ort. Maliyet": st.column_config.NumberColumn("Ort. Maliyet", format="%.4f"),
+                "Fiyat": st.column_config.NumberColumn("Fiyat", format="%.4f"),
+                "Vergi %": st.column_config.TextColumn("Vergi %", disabled=True),
+                "Kesilen Vergi": st.column_config.NumberColumn("Kesilen Vergi (TL)", format="%.0f"),
+                "Kalan Risk (TL)": st.column_config.Column("Kalan Risk", disabled=True),
                 "Net Değer": st.column_config.NumberColumn("Net Değer (TL)", format="%.0f"),
                 "Ort. Süre": st.column_config.TextColumn("Elde Tutma", help="Bu fon/hisse ortalama kaç gündür elinizde? (Parçalı alımlar ağırlıklı hesaplanmıştır)"),
                 "Yıllık Hız": st.column_config.NumberColumn("Verim/Hız (Yıllık)", format="%.1f %%", help="Bu fon bu hızda gitmeye devam ederse 1 yılda % kaç kâr getirir? (Kâr / Gün x 365)"),
                 "Net K/Z": st.column_config.NumberColumn("Net K/Z (TL)", format="%.0f"),
                 "K/Z (%)": st.column_config.NumberColumn("K/Z (%)", format="%.2f"),
-                "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True),
-                "Ort. Maliyet": None
+                "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True)
             }
             
             st.dataframe(df_v.style.format({
+                "Ort. Maliyet": "{:,.4f}", "Fiyat": "{:,.4f}",
+                "Kesilen Vergi": "{:,.0f}",
                 "Net Değer": "{:,.0f}", 
                 "Net K/Z": "{:+,.0f}", "K/Z (%)": "{:+.2f} %"
             }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["Net K/Z", "K/Z (%)", "Günlük Fark", "Yıllık Hız"]), 
