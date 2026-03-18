@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v60")
+st.set_page_config(layout="wide", page_title="Portfoy v61")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -355,14 +355,16 @@ with tab1:
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
                     if metod == "Birim Fiyat":
-                        if fiyat > 0:
+                        # DÜZELTME: Temettü ve bedelsiz için 0 TL girilmesine izin verildi (>= 0 yapıldı)
+                        if fiyat >= 0:
                             raw = adet * fiyat
                             toplam = raw + kom if yon == "Alış" else raw - kom
                         else: st.stop()
                     else:
-                        if toplam_girilen > 0:
+                        # DÜZELTME: Toplam tutar da 0 girilebilir
+                        if toplam_girilen >= 0:
                             toplam = toplam_girilen
-                            fiyat = toplam_girilen / adet; kom = 0
+                            fiyat = (toplam_girilen / adet) if adet > 0 else 0; kom = 0
                         else: st.stop()
                     yeni = {"Tarih": tarih.strftime("%Y-%m-%d"), "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
                             "Islem": yon, "Sembol": kod, "Adet": adet, "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam}
@@ -423,7 +425,7 @@ with tab2:
                     f_info = fund_data.get(sym, {"fiyat": 0, "yuzde": 0})
                     guncel = f_info["fiyat"]
                     pct = f_info["yuzde"]
-                    if guncel == 0: guncel = em / net; ref_fiyat = guncel
+                    if guncel == 0: guncel = em / net if net > 0 else 0; ref_fiyat = guncel
                     else: ref_fiyat = guncel / (1 + (pct/100))
                 
                 brut_deger = net * guncel
@@ -454,7 +456,7 @@ with tab2:
                 liste.append({
                     "Varlık": sym, 
                     "Lot": net,
-                    "Ort. Maliyet": em / net,
+                    "Ort. Maliyet": (em / net) if net > 0 else 0,
                     "Fiyat": guncel,
                     "Vergi %": f"%{vergi_orani}" if vergi_orani > 0 else "-",
                     "Kesilen Vergi": float(vergi_tutari),
