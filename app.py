@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v62")
+st.set_page_config(layout="wide", page_title="Portfoy v63")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -26,7 +26,7 @@ JSON_FILE = "service_account.json"
 def safe_float(val):
     if val is None or val == "": return 0.0
     if isinstance(val, (int, float)): return float(val)
-    val_str = str(val).strip()
+    val_str = str(val).strip().replace("%", "") # Yüzde işareti girilirse temizle
     if "." in val_str and "," in val_str: val_str = val_str.replace(".", "")
     val_str = val_str.replace(",", ".")
     try: return float(val_str)
@@ -515,7 +515,7 @@ with tab2:
             toplam_maliyet = sum([x["Ort. Maliyet"] * x["Lot"] for x in liste])
             
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl)
-            save_asset_snapshots(liste) # YENİ: Varlık bazlı geçmişi kaydet
+            save_asset_snapshots(liste) 
             
             genel_kar = toplam_portfoy_degeri - net_ana_para_tl
             genel_ky = (genel_kar / net_ana_para_tl)*100 if net_ana_para_tl > 0 else 0
@@ -566,7 +566,7 @@ with tab2:
                 "Kesilen Vergi": st.column_config.NumberColumn("Kesilen Vergi (TL)", format="%.0f"),
                 "Kalan Risk (TL)": st.column_config.Column("Kalan Risk", disabled=True),
                 "Net Değer": st.column_config.NumberColumn("Net Değer (TL)", format="%.0f"),
-                "Ort. Süre": st.column_config.TextColumn("Elde Tutma", help="Bu fon/hisse ortalama kaç gündür elinizde?"),
+                "Ort. Süre": st.column_config.TextColumn("Elde Tutma"),
                 "Net K/Z": st.column_config.NumberColumn("Net K/Z (TL)", format="%.0f"),
                 "K/Z (%)": st.column_config.NumberColumn("K/Z (%)", format="%.2f"),
                 "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True)
@@ -610,13 +610,12 @@ with tab3:
     df_assets = get_asset_history()
     if not df_assets.empty and len(df_assets.columns) > 1:
         st.subheader("📊 Varlık Bazında Kâr/Zarar (%) Gidişatı")
-        st.info("💡 Not: Sistem hisse ve fonların günlük geçmiş verilerine ulaşılamadığı için grafik bugünden itibaren çizilmeye başlamıştır.")
+        st.info("💡 Not: Sistem geçmiş verilerine ulaşamadığı için bu grafik bugünden itibaren çizilmeye başlamıştır.")
         
-        # Plotly için veriyi uygun formata çeviriyoruz (Tarih, Varlık, K/Z %)
         df_melted = df_assets.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
         
         f3 = px.line(df_melted, x="Tarih", y="K/Z (%)", color="Varlık", markers=True)
-        f3.add_hline(y=0, line_dash="dash", line_color="red") # 0 noktasına kırmızı kesik çizgi
+        f3.add_hline(y=0, line_dash="dash", line_color="red") 
         f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
         st.plotly_chart(f3, use_container_width=True)
 
@@ -626,7 +625,7 @@ with tab4:
 
 with tab5:
     st.subheader("⚙️ Vergi (Stopaj) Ayarları")
-    st.markdown("Elinizdeki varlıkların stopaj oranlarını (Örn: `10` veya `17.5`) girerek tabloyu tamamen netleştirebilirsiniz.")
+    st.markdown("Elinizdeki varlıkların stopaj oranlarını yazıp kaydedebilirsiniz. (Sadece sayı girin: Örn: `17,5` veya `10`)")
     
     if not df.empty:
         portfolio_sims, _, _ = calculate_portfolio_unified(df)
@@ -637,19 +636,30 @@ with tab5:
             vergi_tablosu = []
             
             for sym in aktif_semboller:
+                mevcut_oran = mevcut_vergiler.get(sym, 0.0)
+                # DÜZELTME: Formatı metin (string) olarak hazırlıyoruz.
+                vergi_metin = str(mevcut_oran).replace(".", ",") if mevcut_oran > 0 else "0"
                 vergi_tablosu.append({
                     "Sembol": sym,
-                    "Vergi Oranı (%)": mevcut_vergiler.get(sym, 0.0)
+                    "Vergi Oranı (%)": vergi_metin
                 })
                 
             df_vergi = pd.DataFrame(vergi_tablosu)
-            edited_tax_df = st.data_editor(df_vergi, hide_index=True, use_container_width=True)
+            
+            # DÜZELTME: Sütunu metin sütunu olarak ayarlıyoruz ki 17,5 gibi girişleri engellemesin.
+            cfg_vergi = {
+                "Sembol": st.column_config.TextColumn("Sembol", disabled=True),
+                "Vergi Oranı (%)": st.column_config.TextColumn("Vergi Oranı (%)")
+            }
+            
+            edited_tax_df = st.data_editor(df_vergi, hide_index=True, use_container_width=True, column_config=cfg_vergi)
             
             if st.button("💾 Vergileri Kaydet"):
                 yeni_vergi_sozlugu = {}
                 for _, row in edited_tax_df.iterrows():
-                    # DÜZELTİLDİ: Artık virgüllü de yazsanız sorunsuz çevirecek
-                    yeni_vergi_sozlugu[row["Sembol"]] = safe_float(row["Vergi Oranı (%)"])
+                    # Girilen metni sayımıza çeviriyoruz
+                    girdi = str(row["Vergi Oranı (%)"])
+                    yeni_vergi_sozlugu[row["Sembol"]] = safe_float(girdi)
                     
                 with st.spinner("Kaydediliyor..."):
                     save_tax_rates(yeni_vergi_sozlugu)
