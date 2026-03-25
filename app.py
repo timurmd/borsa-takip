@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v61")
+st.set_page_config(layout="wide", page_title="Portfoy v62")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -36,8 +36,8 @@ def safe_float(val):
 def renk(val):
     c = ''
     if isinstance(val, (int, float)):
-        if val > 0: c = '#2ecc71' # Yeşil
-        elif val < 0: c = '#e74c3c' # Kırmızı
+        if val > 0: c = '#2ecc71' 
+        elif val < 0: c = '#e74c3c' 
     elif isinstance(val, str):
         if val.startswith('+'): c = '#2ecc71'
         elif val.startswith('-'): c = '#e74c3c'
@@ -156,6 +156,65 @@ def save_daily_snapshot(tv, tm, dk, net_ana):
         idx = dates.index(bugun) + 1
         for i, val in enumerate(d[1:]): sheet.update_cell(idx, i+2, val)
 
+# --- YENİ: VARLIK GEÇMİŞİNİ KAYDEDEN FONKSİYON ---
+def save_asset_snapshots(liste):
+    client = init_connection()
+    bugun = datetime.now().strftime("%Y-%m-%d")
+    try:
+        try: sheet = client.open_by_key(SHEET_ID).worksheet("VarlikKari")
+        except: 
+            sheet = client.open_by_key(SHEET_ID).add_worksheet("VarlikKari", 1000, 26)
+            sheet.append_row(["Tarih"])
+        
+        headers = sheet.row_values(1)
+        if not headers: headers = ["Tarih"]
+        
+        data_dict = {item["Varlık"]: str(item["K/Z (%)"]).replace(".", ",") for item in liste}
+        
+        added_header = False
+        for sym in data_dict.keys():
+            if sym not in headers:
+                headers.append(sym)
+                added_header = True
+                
+        if added_header:
+            for c_idx, h_val in enumerate(headers):
+                sheet.update_cell(1, c_idx + 1, h_val)
+                
+        dates = sheet.col_values(1)
+        row_data = [bugun]
+        for h in headers[1:]:
+            row_data.append(data_dict.get(h, "0"))
+            
+        if bugun not in dates:
+            sheet.append_row(row_data)
+        else:
+            r_idx = dates.index(bugun) + 1
+            for c_idx, val in enumerate(row_data):
+                sheet.update_cell(r_idx, c_idx + 1, val)
+    except: pass
+
+def get_asset_history():
+    client = init_connection()
+    try:
+        sheet = client.open_by_key(SHEET_ID).worksheet("VarlikKari")
+        raw = sheet.get_all_values()
+        if len(raw) < 2: return pd.DataFrame()
+        
+        actual_cols = raw[0]
+        valid_data = []
+        for r in raw[1:]:
+            r_padded = r + ["0"] * (len(actual_cols) - len(r))
+            valid_data.append(r_padded[:len(actual_cols)])
+
+        df = pd.DataFrame(valid_data, columns=actual_cols)
+        for c in df.columns:
+            if c != "Tarih": df[c] = df[c].apply(safe_float)
+            
+        df["Tarih"] = pd.to_datetime(df["Tarih"])
+        return df.sort_values("Tarih", ascending=True)
+    except: return pd.DataFrame()
+
 def get_history_data():
     client = init_connection()
     try:
@@ -197,20 +256,14 @@ def calculate_benchmarks(df_transactions):
     m = get_historical_market_data()
     if m.empty: return 0, 0, 0, 0
     
-    tl_injected = 0
-    usd_injected = 0
-    gold_injected = 0
-    
+    tl_injected = 0; usd_injected = 0; gold_injected = 0
     df_al = df_transactions[df_transactions["Islem"] == "Alış"]
     df_sat = df_transactions[df_transactions["Islem"] == "Satış"]
     
     for _, r in df_al.iterrows():
         try:
             day = m.loc[m.index.asof(r["Tarih"].date())]
-            usd = day['USD']
-            gold = day['Gram_Gold']
-            amt = float(r["Toplam"])
-            
+            usd = day['USD']; gold = day['Gram_Gold']; amt = float(r["Toplam"])
             tl_injected += amt
             if usd > 0: usd_injected += amt / usd
             if gold > 0: gold_injected += amt / gold
@@ -221,17 +274,12 @@ def calculate_benchmarks(df_transactions):
     if tl_injected > 0 and net_ana_para > 0:
         avg_usd_rate = tl_injected / usd_injected if usd_injected > 0 else 1
         avg_gold_rate = tl_injected / gold_injected if gold_injected > 0 else 1
-        
-        usd_eq = net_ana_para / avg_usd_rate
-        gold_eq = net_ana_para / avg_gold_rate
+        usd_eq = net_ana_para / avg_usd_rate; gold_eq = net_ana_para / avg_gold_rate
         
         try:
             last = m.iloc[-1]
-            val_usd = usd_eq * last['USD']
-            val_gold = gold_eq * last['Gram_Gold']
-            return val_usd, val_gold, usd_eq, gold_eq
+            return usd_eq * last['USD'], gold_eq * last['Gram_Gold'], usd_eq, gold_eq
         except: pass
-        
     return 0, 0, 0, 0
 
 def calculate_net_usd_cost(df_transactions):
@@ -242,8 +290,7 @@ def calculate_net_usd_cost(df_transactions):
     for _, r in df_s.iterrows():
         try:
             day = m.loc[m.index.asof(r["Tarih"].date())]
-            usd_rate = day['USD']
-            amt = float(r["Toplam"])
+            usd_rate = day['USD']; amt = float(r["Toplam"])
             if r["Islem"] == "Alış": net_usd_cost += amt / usd_rate
             else: net_usd_cost -= amt / usd_rate
         except: continue
@@ -263,13 +310,11 @@ def get_usd_rate():
     try: return yf.Ticker("USDTRY=X").fast_info['last_price']
     except: return 1.0
 
-# --- ANA HESAPLAMA MOTORU (FIFO ve SÜRE) ---
+# --- ANA HESAPLAMA MOTORU ---
 def calculate_portfolio_unified(df):
     portfolio = {}
     df = df.sort_values("Tarih")
-    
-    toplam_giren = 0
-    toplam_cikan = 0
+    toplam_giren = 0; toplam_cikan = 0
     
     for _, row in df.iterrows():
         sym = row["Sembol"]; typ = row["Tur"]; islem = row["Islem"]
@@ -355,13 +400,11 @@ with tab1:
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
                     if metod == "Birim Fiyat":
-                        # DÜZELTME: Temettü ve bedelsiz için 0 TL girilmesine izin verildi (>= 0 yapıldı)
                         if fiyat >= 0:
                             raw = adet * fiyat
                             toplam = raw + kom if yon == "Alış" else raw - kom
                         else: st.stop()
                     else:
-                        # DÜZELTME: Toplam tutar da 0 girilebilir
                         if toplam_girilen >= 0:
                             toplam = toplam_girilen
                             fiyat = (toplam_girilen / adet) if adet > 0 else 0; kom = 0
@@ -440,8 +483,6 @@ with tab2:
                 net_kz = brut_kz - vergi_tutari
                 net_deger = brut_deger - vergi_tutari
                 net_kz_yuzde = (net_kz / em) * 100 if em > 0 else 0
-                
-                yillik_hiz = (net_kz_yuzde / ort_gun) * 365 if ort_gun > 0 else 0
 
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
@@ -463,7 +504,6 @@ with tab2:
                     "Kalan Risk (TL)": maliyet_durumu,
                     "Net Değer": float(net_deger),
                     "Ort. Süre": f"{ort_gun} Gün", 
-                    "Yıllık Hız": float(yillik_hiz), 
                     "Net K/Z": float(net_kz),
                     "K/Z (%)": float(net_kz_yuzde),
                     "Günlük Fark": gf_metin
@@ -475,6 +515,7 @@ with tab2:
             toplam_maliyet = sum([x["Ort. Maliyet"] * x["Lot"] for x in liste])
             
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl)
+            save_asset_snapshots(liste) # YENİ: Varlık bazlı geçmişi kaydet
             
             genel_kar = toplam_portfoy_degeri - net_ana_para_tl
             genel_ky = (genel_kar / net_ana_para_tl)*100 if net_ana_para_tl > 0 else 0
@@ -525,8 +566,7 @@ with tab2:
                 "Kesilen Vergi": st.column_config.NumberColumn("Kesilen Vergi (TL)", format="%.0f"),
                 "Kalan Risk (TL)": st.column_config.Column("Kalan Risk", disabled=True),
                 "Net Değer": st.column_config.NumberColumn("Net Değer (TL)", format="%.0f"),
-                "Ort. Süre": st.column_config.TextColumn("Elde Tutma", help="Bu fon/hisse ortalama kaç gündür elinizde? (Parçalı alımlar ağırlıklı hesaplanmıştır)"),
-                "Yıllık Hız": st.column_config.NumberColumn("Verim/Hız (Yıllık)", format="%.1f %%", help="Bu fon bu hızda gitmeye devam ederse 1 yılda % kaç kâr getirir? (Kâr / Gün x 365)"),
+                "Ort. Süre": st.column_config.TextColumn("Elde Tutma", help="Bu fon/hisse ortalama kaç gündür elinizde?"),
                 "Net K/Z": st.column_config.NumberColumn("Net K/Z (TL)", format="%.0f"),
                 "K/Z (%)": st.column_config.NumberColumn("K/Z (%)", format="%.2f"),
                 "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True)
@@ -537,11 +577,13 @@ with tab2:
                 "Kesilen Vergi": "{:,.0f}",
                 "Net Değer": "{:,.0f}", 
                 "Net K/Z": "{:+,.0f}", "K/Z (%)": "{:+.2f} %"
-            }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["Net K/Z", "K/Z (%)", "Günlük Fark", "Yıllık Hız"]), 
+            }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["Net K/Z", "K/Z (%)", "Günlük Fark"]), 
             use_container_width=True, hide_index=True, column_config=cfg)
 
 with tab3:
     st.subheader("📈 Gidişat")
+    
+    # 1. Genel Portföy Gidişatı
     df_hist = get_history_data()
     if not df_hist.empty:
         df_hist["GenelKar"] = df_hist["ToplamVarlik"] - df_hist["NetAnaPara"]
@@ -560,7 +602,24 @@ with tab3:
         f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"], name='ANLIK KÂR (Sadece Eldekiler)', line=dict(color='#f1c40f', width=2, dash='dash')))
         f2.update_layout(title="Kâr Analizi: Genel vs Anlık", hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
-    else: st.info("Veri toplanıyor...")
+    else: st.info("Genel veri toplanıyor...")
+    
+    st.divider()
+
+    # 2. YENİ: Varlık Bazında Kâr Gidişatı
+    df_assets = get_asset_history()
+    if not df_assets.empty and len(df_assets.columns) > 1:
+        st.subheader("📊 Varlık Bazında Kâr/Zarar (%) Gidişatı")
+        st.info("💡 Not: Sistem hisse ve fonların günlük geçmiş verilerine ulaşılamadığı için grafik bugünden itibaren çizilmeye başlamıştır.")
+        
+        # Plotly için veriyi uygun formata çeviriyoruz (Tarih, Varlık, K/Z %)
+        df_melted = df_assets.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
+        
+        f3 = px.line(df_melted, x="Tarih", y="K/Z (%)", color="Varlık", markers=True)
+        f3.add_hline(y=0, line_dash="dash", line_color="red") # 0 noktasına kırmızı kesik çizgi
+        f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
+        st.plotly_chart(f3, use_container_width=True)
+
 
 with tab4:
     st.dataframe(df.sort_index(ascending=False).style.format({"Fiyat": "{:,.4f}", "Toplam": "{:,.2f}", "Komisyon": "{:,.2f}", "Adet": "{:.0f}"}), use_container_width=True)
@@ -589,7 +648,8 @@ with tab5:
             if st.button("💾 Vergileri Kaydet"):
                 yeni_vergi_sozlugu = {}
                 for _, row in edited_tax_df.iterrows():
-                    yeni_vergi_sozlugu[row["Sembol"]] = float(row["Vergi Oranı (%)"])
+                    # DÜZELTİLDİ: Artık virgüllü de yazsanız sorunsuz çevirecek
+                    yeni_vergi_sozlugu[row["Sembol"]] = safe_float(row["Vergi Oranı (%)"])
                     
                 with st.spinner("Kaydediliyor..."):
                     save_tax_rates(yeni_vergi_sozlugu)
