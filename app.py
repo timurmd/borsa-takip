@@ -26,7 +26,7 @@ JSON_FILE = "service_account.json"
 def safe_float(val):
     if val is None or val == "": return 0.0
     if isinstance(val, (int, float)): return float(val)
-    val_str = str(val).strip().replace("%", "") # Yüzde işareti girilirse temizle
+    val_str = str(val).strip().replace("%", "")
     if "." in val_str and "," in val_str: val_str = val_str.replace(".", "")
     val_str = val_str.replace(",", ".")
     try: return float(val_str)
@@ -113,7 +113,13 @@ def get_tax_rates():
         sheet = client.open_by_key(SHEET_ID).worksheet("Vergiler")
         raw = sheet.get_all_values()
         if len(raw) < 2: return {}
-        return {str(row[0]).strip().upper(): safe_float(row[1]) for row in raw[1:] if len(row) > 1}
+        # DÜZELTME: Sadece gerçekten dolu sembolleri okuması için güvenlik kontrolü
+        tax_dict = {}
+        for row in raw[1:]:
+            if len(row) > 1 and str(row[0]).strip():
+                sym = str(row[0]).strip().upper()
+                tax_dict[sym] = safe_float(row[1])
+        return tax_dict
     except: return {}
 
 def save_tax_rates(tax_dict):
@@ -126,8 +132,17 @@ def save_tax_rates(tax_dict):
     rows = [["Sembol", "VergiOrani"]]
     for sym, rate in tax_dict.items():
         rows.append([sym, str(rate).replace(".", ",")])
+        
     sheet.clear()
-    sheet.append_rows(rows)
+    
+    # KÖKLÜ DÜZELTME: 1000 satır atlama huyunu engellemek için doğrudan A1'den itibaren hücreleri güncelliyoruz.
+    cell_list = sheet.range(f"A1:B{len(rows)}")
+    flat_data = []
+    for r in rows:
+        flat_data.extend(r)
+    for i, cell in enumerate(cell_list):
+        cell.value = flat_data[i]
+    sheet.update_cells(cell_list)
 
 def save_daily_snapshot(tv, tm, dk, net_ana):
     if tv < 100 and tm > 1000:
@@ -156,7 +171,6 @@ def save_daily_snapshot(tv, tm, dk, net_ana):
         idx = dates.index(bugun) + 1
         for i, val in enumerate(d[1:]): sheet.update_cell(idx, i+2, val)
 
-# --- YENİ: VARLIK GEÇMİŞİNİ KAYDEDEN FONKSİYON ---
 def save_asset_snapshots(liste):
     client = init_connection()
     bugun = datetime.now().strftime("%Y-%m-%d")
@@ -211,7 +225,8 @@ def get_asset_history():
         for c in df.columns:
             if c != "Tarih": df[c] = df[c].apply(safe_float)
             
-        df["Tarih"] = pd.to_datetime(df["Tarih"])
+        df["Tarih"] = pd.to_datetime(df["Tarih"], errors="coerce")
+        df = df.dropna(subset=["Tarih"]) # DÜZELTME: Boş tarihleri atla
         return df.sort_values("Tarih", ascending=True)
     except: return pd.DataFrame()
 
@@ -235,7 +250,8 @@ def get_history_data():
             if c in df.columns: df[c] = df[c].apply(safe_float)
             else: df[c] = 0.0
 
-        df["Tarih"] = pd.to_datetime(df["Tarih"])
+        df["Tarih"] = pd.to_datetime(df["Tarih"], errors="coerce")
+        df = df.dropna(subset=["Tarih"]) # DÜZELTME: Boş tarihleri atla
         return df.sort_values("Tarih", ascending=True)
     except: return pd.DataFrame()
 
@@ -606,11 +622,11 @@ with tab3:
     
     st.divider()
 
-    # 2. YENİ: Varlık Bazında Kâr Gidişatı
+    # 2. Varlık Bazında Kâr Gidişatı
     df_assets = get_asset_history()
     if not df_assets.empty and len(df_assets.columns) > 1:
         st.subheader("📊 Varlık Bazında Kâr/Zarar (%) Gidişatı")
-        st.info("💡 Not: Sistem geçmiş verilerine ulaşamadığı için bu grafik bugünden itibaren çizilmeye başlamıştır.")
+        st.info("💡 Not: Grafik bugünden itibaren her gün varlıkların kapanış performansını işleyerek ilerleyecektir.")
         
         df_melted = df_assets.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
         
@@ -618,7 +634,6 @@ with tab3:
         f3.add_hline(y=0, line_dash="dash", line_color="red") 
         f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
         st.plotly_chart(f3, use_container_width=True)
-
 
 with tab4:
     st.dataframe(df.sort_index(ascending=False).style.format({"Fiyat": "{:,.4f}", "Toplam": "{:,.2f}", "Komisyon": "{:,.2f}", "Adet": "{:.0f}"}), use_container_width=True)
@@ -637,7 +652,6 @@ with tab5:
             
             for sym in aktif_semboller:
                 mevcut_oran = mevcut_vergiler.get(sym, 0.0)
-                # DÜZELTME: Formatı metin (string) olarak hazırlıyoruz.
                 vergi_metin = str(mevcut_oran).replace(".", ",") if mevcut_oran > 0 else "0"
                 vergi_tablosu.append({
                     "Sembol": sym,
@@ -646,7 +660,6 @@ with tab5:
                 
             df_vergi = pd.DataFrame(vergi_tablosu)
             
-            # DÜZELTME: Sütunu metin sütunu olarak ayarlıyoruz ki 17,5 gibi girişleri engellemesin.
             cfg_vergi = {
                 "Sembol": st.column_config.TextColumn("Sembol", disabled=True),
                 "Vergi Oranı (%)": st.column_config.TextColumn("Vergi Oranı (%)")
@@ -657,7 +670,6 @@ with tab5:
             if st.button("💾 Vergileri Kaydet"):
                 yeni_vergi_sozlugu = {}
                 for _, row in edited_tax_df.iterrows():
-                    # Girilen metni sayımıza çeviriyoruz
                     girdi = str(row["Vergi Oranı (%)"])
                     yeni_vergi_sozlugu[row["Sembol"]] = safe_float(girdi)
                     
