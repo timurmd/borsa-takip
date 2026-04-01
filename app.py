@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- AYARLAR ---
-st.set_page_config(layout="wide", page_title="Portfoy v64")
+st.set_page_config(layout="wide", page_title="Portfoy v65")
 
 # 👇👇👇 BURAYI DOLDURUN 👇👇👇
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
@@ -289,7 +289,7 @@ def get_usd_rate():
     try: return yf.Ticker("USDTRY=X").fast_info['last_price']
     except: return 1.0
 
-# --- ANA HESAPLAMA MOTORU (FIFO ve SÜRE) ---
+# --- ANA HESAPLAMA MOTORU ---
 def calculate_portfolio_unified(df):
     portfolio = {}
     df = df.sort_values("Tarih")
@@ -353,7 +353,6 @@ if st.sidebar.button("🔒 Çıkış"): del st.session_state["password_correct"]
 try: df = get_data()
 except: st.stop()
 
-# Ayarlar sekmesini kaldırdık. Sade ve güçlü 4 sekme!
 tab1, tab2, tab3, tab4 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "📈 GİDİŞAT", "📋 GEÇMİŞ"])
 
 with tab1:
@@ -379,20 +378,33 @@ with tab1:
             
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
+                    hata = False
+                    
+                    # DÜZELTME 1: SATIŞ İŞLEMİNDE 0 TL ENGELİ
                     if metod == "Birim Fiyat":
-                        if fiyat >= 0:
+                        if yon == "Satış" and fiyat <= 0:
+                            st.error("⚠️ Hata: Satış işlemi için fiyat 0'dan büyük olmalıdır!")
+                            hata = True
+                        elif fiyat >= 0:
                             raw = adet * fiyat
                             toplam = raw + kom if yon == "Alış" else raw - kom
-                        else: st.stop()
+                        else:
+                            hata = True
                     else:
-                        if toplam_girilen >= 0:
+                        if yon == "Satış" and toplam_girilen <= 0:
+                            st.error("⚠️ Hata: Satış işlemi için tutar 0'dan büyük olmalıdır!")
+                            hata = True
+                        elif toplam_girilen >= 0:
                             toplam = toplam_girilen
                             fiyat = (toplam_girilen / adet) if adet > 0 else 0; kom = 0
-                        else: st.stop()
-                    yeni = {"Tarih": tarih.strftime("%Y-%m-%d"), "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
-                            "Islem": yon, "Sembol": kod, "Adet": adet, "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam}
-                    with st.spinner("Kaydediliyor..."):
-                        save_transaction(yeni); st.success("Tamam!"); st.cache_data.clear(); st.rerun()
+                        else:
+                            hata = True
+                    
+                    if not hata:
+                        yeni = {"Tarih": tarih.strftime("%Y-%m-%d"), "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
+                                "Islem": yon, "Sembol": kod, "Adet": adet, "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam}
+                        with st.spinner("Kaydediliyor..."):
+                            save_transaction(yeni); st.success("Tamam!"); st.cache_data.clear(); st.rerun()
     with col_sil:
         st.subheader("Sil")
         try:
@@ -565,18 +577,28 @@ with tab3:
     
     st.divider()
 
-    # 2. Varlık Bazında Kâr Gidişatı
+    # 2. DÜZELTME 2: Varlık Bazında Kâr Gidişatı (Sadece aktif olanları gösterir)
     df_assets = get_asset_history()
     if not df_assets.empty and len(df_assets.columns) > 1:
         st.subheader("📊 Varlık Bazında Kâr/Zarar (%) Gidişatı")
-        st.info("💡 Not: Grafik bugünden itibaren her gün varlıkların kapanış performansını işleyerek ilerleyecektir.")
+        st.info("💡 Not: Grafik bugünden itibaren her gün varlıkların kapanış performansını işleyerek ilerleyecektir. Tamamen satılan varlıklar grafikten otomatik gizlenir.")
         
-        df_melted = df_assets.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
+        # Sadece güncel olarak elimizde olan sembolleri grafiğe dahil ediyoruz
+        portfolio_gidisat, _, _ = calculate_portfolio_unified(df)
+        aktif_semboller = [sym for sym, d in portfolio_gidisat.items() if d["Adet"] > 0]
         
-        f3 = px.line(df_melted, x="Tarih", y="K/Z (%)", color="Varlık", markers=True)
-        f3.add_hline(y=0, line_dash="dash", line_color="red") 
-        f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
-        st.plotly_chart(f3, use_container_width=True)
+        gosterilecek_kolonlar = ["Tarih"] + [c for c in df_assets.columns if c in aktif_semboller]
+        
+        if len(gosterilecek_kolonlar) > 1:
+            df_assets_aktif = df_assets[gosterilecek_kolonlar]
+            df_melted = df_assets_aktif.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
+            
+            f3 = px.line(df_melted, x="Tarih", y="K/Z (%)", color="Varlık", markers=True)
+            f3.add_hline(y=0, line_dash="dash", line_color="red") 
+            f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
+            st.plotly_chart(f3, use_container_width=True)
+        else:
+            st.warning("Grafiği çizilecek aktif varlık bulunamadı.")
 
 with tab4:
     st.dataframe(df.sort_index(ascending=False).style.format({"Fiyat": "{:,.4f}", "Toplam": "{:,.2f}", "Komisyon": "{:,.2f}", "Adet": "{:.0f}"}), use_container_width=True)
