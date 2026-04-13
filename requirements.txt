@@ -5,3 +5,5 @@ openpyxl
 gspread
 google-auth
 plotly
+requests
+beautifulsoup4
