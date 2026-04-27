@@ -4,25 +4,26 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import os
 import warnings
-import re
-import time
-import requests
 import gspread
-from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v65")
+st.set_page_config(layout="wide", page_title="Portfoy v66")
 
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
-
-DATA_FILE = "portfolio_transactions.csv"
 JSON_FILE = "service_account.json"
 
+FINTABLES_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
 
+
+# --- YARDIMCI ---
 def safe_float(val):
     if val is None or val == "":
         return 0.0
@@ -39,144 +40,83 @@ def safe_float(val):
 
 
 def renk(val):
-    c = ''
+    c = ""
     if isinstance(val, (int, float)):
         if val > 0:
-            c = '#2ecc71'
+            c = "#2ecc71"
         elif val < 0:
-            c = '#e74c3c'
+            c = "#e74c3c"
     elif isinstance(val, str):
-        if val.startswith('+'):
-            c = '#2ecc71'
-        elif val.startswith('-'):
-            c = '#e74c3c'
+        if val.startswith("+"):
+            c = "#2ecc71"
+        elif val.startswith("-"):
+            c = "#e74c3c"
         elif val == "BEDAVA":
-            c = '#3498db'
-
+            c = "#3498db"
     if c:
-        return f'color: {c}; font-weight: bold;'
-    return ''
+        return f"color: {c}; font-weight: bold;"
+    return ""
 
 
+# --- GOOGLE BAĞLANTISI ---
 @st.cache_resource
 def init_connection():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
+        "https://www.googleapis.com/auth/drive",
     ]
     if os.path.exists(JSON_FILE):
         return gspread.authorize(
             Credentials.from_service_account_file(JSON_FILE, scopes=scopes)
         )
-    else:
-        try:
-            info = dict(st.secrets["gcp_service_account"])
-            if "private_key" in info:
-                info["private_key"] = info["private_key"].replace("\\n", "\n")
-            return gspread.authorize(
-                Credentials.from_service_account_info(info, scopes=scopes)
-            )
-        except Exception as e:
-            st.error(f"Hata: {e}")
-            st.stop()
+    try:
+        info = dict(st.secrets["gcp_service_account"])
+        if "private_key" in info:
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+        return gspread.authorize(
+            Credentials.from_service_account_info(info, scopes=scopes)
+        )
+    except Exception as e:
+        st.error(f"Hata: {e}")
+        st.stop()
 
 
-def create_tefas_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Referer": "https://www.tefas.gov.tr/",
-    })
-    return session
+# --- FON FİYATI (FİNTABLES) ---
+@st.cache_data(ttl=300)
+def get_fund_price_fintables(fon_kod):
+    """
+    Fintables API üzerinden fon fiyatı ve günlük değişim yüzdesi döndürür.
+    Dönüş: (fiyat: float, gunluk_pct: float)
+    """
+    try:
+        url = f"https://api.fintables.com/funds/{fon_kod.upper()}/price/"
+        r = requests.get(url, headers=FINTABLES_HEADERS, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            price = float(data.get("price", 0))
+            prev_price = float(data.get("prev_price", 0))
+            if prev_price > 0:
+                gunluk_pct = ((price - prev_price) / prev_price) * 100
+            else:
+                gunluk_pct = 0.0
+            return price, gunluk_pct
+    except Exception as e:
+        print(f"[Fintables] {fon_kod} hata: {e}")
+    return 0.0, 0.0
 
 
-def is_blocked_response(html):
-    markers = [
-        "Please enable JavaScript",
-        "support ID",
-        "Access Denied",
-        "Forbidden",
-        "captcha",
-        "robot",
-        "human",
-    ]
-    html_lower = html.lower()
-    return any(m.lower() in html_lower for m in markers)
-
-
-def html_to_text(html):
-    soup = BeautifulSoup(html, "html.parser")
-    return " ".join(soup.get_text(" ", strip=True).split())
-
-
-def extract_value_after_label(text, label):
-    escaped_label = re.escape(label)
-    pattern = rf"{escaped_label}\s*%?\s*(-?\d{{1,3}}(?:\.\d{{3}})*,\d+|-?\d+,\d+|-?\d+)"
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1)
-
-
-def normalize_number(value):
-    if not value:
-        return "0"
-    return str(value).replace("%", "").replace(" ", "").replace(".", "")
-
-
-def fetch_tefas_fund_data(session, fund_code):
-    fund_code = str(fund_code or "").strip().upper()
-    if not fund_code:
-        return ("0", "0", "EMPTY")
-
-    url = f"https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod={fund_code}"
-
-    for _ in range(3):
-        try:
-            response = session.get(url, timeout=30)
-            html = response.text
-
-            if response.status_code != 200:
-                time.sleep(2)
-                continue
-
-            if is_blocked_response(html):
-                return ("BLOCKED", "BLOCKED", "BLOCKED")
-
-            text = html_to_text(html)
-            price = extract_value_after_label(text, "Son Fiyat (TL)")
-            daily_return = extract_value_after_label(text, "Günlük Getiri (%)")
-
-            if price:
-                return (
-                    normalize_number(price),
-                    normalize_number(daily_return) if daily_return else "0",
-                    "OK"
-                )
-        except:
-            pass
-
-        time.sleep(2)
-
-    return ("0", "0", "FAIL")
-
-
-def refresh_fund_prices_in_sheet():
+def refresh_fund_prices_in_sheet(active_symbols=None):
+    """Aktif fon sembollerinin fiyatlarını Fintables'tan çekip Google Sheets'e yazar."""
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
     raw = sheet.get_all_values()
 
     if len(raw) < 2:
-        return {"updated": 0, "blocked": 0, "failed": 0, "total": 0}
+        return {"updated": 0, "failed": 0, "total": 0}
 
-    session = create_tefas_session()
+    active_symbols = set(active_symbols or [])
     updates = []
     updated_count = 0
-    blocked_count = 0
     failed_count = 0
 
     for row in raw[1:]:
@@ -185,18 +125,16 @@ def refresh_fund_prices_in_sheet():
         old_pct = row[2] if len(row) > 2 and row[2] else "0"
         new_row = [old_price, old_pct]
 
-        if symbol:
-            price, pct, status = fetch_tefas_fund_data(session, symbol)
-
-            if status == "OK":
-                new_row = [price, pct]
+        if symbol and symbol in active_symbols:
+            price, pct = get_fund_price_fintables(symbol)
+            if price > 0:
+                new_row = [
+                    str(price).replace(".", ","),
+                    str(round(pct, 4)).replace(".", ",")
+                ]
                 updated_count += 1
-            elif status == "BLOCKED":
-                blocked_count += 1
             else:
                 failed_count += 1
-
-            time.sleep(2)
 
         updates.append(new_row)
 
@@ -205,21 +143,13 @@ def refresh_fund_prices_in_sheet():
 
     sheet.update(
         "B1:D1",
-        [[
-            "Fiyat",
-            "Günlük %",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ]]
+        [["Fiyat", "Günlük %", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]]
     )
 
-    return {
-        "updated": updated_count,
-        "blocked": blocked_count,
-        "failed": failed_count,
-        "total": len(updates)
-    }
+    return {"updated": updated_count, "failed": failed_count, "total": len(active_symbols)}
 
 
+# --- VERİ İŞLEMLERİ ---
 def get_data():
     client = init_connection()
     try:
@@ -231,7 +161,7 @@ def get_data():
         for c in ["Adet", "Fiyat", "Komisyon", "Toplam"]:
             if c in df.columns:
                 df[c] = df[c].apply(safe_float)
-        df["Tarih"] = pd.to_datetime(df["Tarih"], dayfirst=False, errors='coerce')
+        df["Tarih"] = pd.to_datetime(df["Tarih"], dayfirst=False, errors="coerce")
         if "Sembol" in df.columns:
             df["Sembol"] = df["Sembol"].astype(str).str.strip().str.upper().str.replace(".IS", "")
         return df
@@ -244,7 +174,8 @@ def save_transaction(veri):
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     row = [
         veri["Tarih"], veri["Tur"], veri["Islem"], veri["Sembol"], veri["Adet"],
-        str(veri["Fiyat"]).replace(".", ","), str(veri["Komisyon"]).replace(".", ","), str(veri["Toplam"]).replace(".", ",")
+        str(veri["Fiyat"]).replace(".", ","), str(veri["Komisyon"]).replace(".", ","),
+        str(veri["Toplam"]).replace(".", ",")
     ]
     sheet.append_row(row)
     try:
@@ -294,14 +225,8 @@ def save_daily_snapshot(tv, tm, dk, net_ana):
 
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
-
-    d = [
-        bugun,
-        str(tv).replace(".", ","),
-        str(tm).replace(".", ","),
-        str(dk).replace(".", ","),
-        str(net_ana).replace(".", ",")
-    ]
+    d = [bugun, str(tv).replace(".", ","), str(tm).replace(".", ","),
+         str(dk).replace(".", ","), str(net_ana).replace(".", ",")]
 
     if bugun not in dates:
         sheet.append_row(d)
@@ -416,15 +341,15 @@ def get_historical_market_data():
     gold = yf.download("GC=F", start=start, end=end, progress=False)
     if usd.empty or gold.empty:
         return pd.DataFrame()
-    usd = usd['Close'].reset_index()
-    usd.columns = ['Date', 'USD']
-    usd['Date'] = pd.to_datetime(usd['Date']).dt.date
-    gold = gold['Close'].reset_index()
-    gold.columns = ['Date', 'Gold_Ounce']
-    gold['Date'] = pd.to_datetime(gold['Date']).dt.date
-    m = pd.merge(usd, gold, on='Date', how='outer').sort_values('Date').ffill()
-    m['Gram_Gold'] = (m['Gold_Ounce'] * m['USD']) / 31.1035
-    m.set_index('Date', inplace=True)
+    usd = usd["Close"].reset_index()
+    usd.columns = ["Date", "USD"]
+    usd["Date"] = pd.to_datetime(usd["Date"]).dt.date
+    gold = gold["Close"].reset_index()
+    gold.columns = ["Date", "Gold_Ounce"]
+    gold["Date"] = pd.to_datetime(gold["Date"]).dt.date
+    m = pd.merge(usd, gold, on="Date", how="outer").sort_values("Date").ffill()
+    m["Gram_Gold"] = (m["Gold_Ounce"] * m["USD"]) / 31.1035
+    m.set_index("Date", inplace=True)
     return m
 
 
@@ -442,8 +367,8 @@ def calculate_benchmarks(df_transactions):
     for _, r in df_al.iterrows():
         try:
             day = m.loc[m.index.asof(r["Tarih"].date())]
-            usd = day['USD']
-            gold = day['Gram_Gold']
+            usd = day["USD"]
+            gold = day["Gram_Gold"]
             amt = float(r["Toplam"])
             tl_injected += amt
             if usd > 0:
@@ -460,33 +385,12 @@ def calculate_benchmarks(df_transactions):
         avg_gold_rate = tl_injected / gold_injected if gold_injected > 0 else 1
         usd_eq = net_ana_para / avg_usd_rate
         gold_eq = net_ana_para / avg_gold_rate
-
         try:
             last = m.iloc[-1]
-            return usd_eq * last['USD'], gold_eq * last['Gram_Gold'], usd_eq, gold_eq
+            return usd_eq * last["USD"], gold_eq * last["Gram_Gold"], usd_eq, gold_eq
         except:
             pass
     return 0, 0, 0, 0
-
-
-def calculate_net_usd_cost(df_transactions):
-    m = get_historical_market_data()
-    if m.empty:
-        return 0
-    net_usd_cost = 0
-    df_s = df_transactions.sort_values("Tarih")
-    for _, r in df_s.iterrows():
-        try:
-            day = m.loc[m.index.asof(r["Tarih"].date())]
-            usd_rate = day['USD']
-            amt = float(r["Toplam"])
-            if r["Islem"] == "Alış":
-                net_usd_cost += amt / usd_rate
-            else:
-                net_usd_cost -= amt / usd_rate
-        except:
-            continue
-    return net_usd_cost
 
 
 @st.cache_data(ttl=300)
@@ -496,7 +400,7 @@ def get_stock_data_full(symbol):
         if not s.endswith(".IS"):
             s += ".IS"
         info = yf.Ticker(s).fast_info
-        return info['last_price'], info['previous_close']
+        return info["last_price"], info["previous_close"]
     except:
         return 0.0, 0.0
 
@@ -504,7 +408,7 @@ def get_stock_data_full(symbol):
 @st.cache_data(ttl=3600)
 def get_usd_rate():
     try:
-        return yf.Ticker("USDTRY=X").fast_info['last_price']
+        return yf.Ticker("USDTRY=X").fast_info["last_price"]
     except:
         return 1.0
 
@@ -568,6 +472,7 @@ def calculate_portfolio_unified(df):
     return portfolio, toplam_giren, toplam_cikan
 
 
+# --- ARAYÜZ ---
 st.title("☁️ Bulut Portföy & Analiz")
 
 
@@ -579,9 +484,11 @@ def check_password():
 
 
 def pwd_entered():
-    if st.session_state["pwd"] == st.secrets["app_password"]:
+    pwd_value = st.session_state.get("pwd", "")
+    if pwd_value == st.secrets["app_password"]:
         st.session_state["password_correct"] = True
-        del st.session_state["pwd"]
+        if "pwd" in st.session_state:
+            del st.session_state["pwd"]
     else:
         st.session_state["password_correct"] = False
 
@@ -626,7 +533,6 @@ with tab1:
             if st.form_submit_button("KAYDET"):
                 if kod and adet > 0:
                     hata = False
-
                     if metod == "Birim Fiyat":
                         if yon == "Satış" and fiyat <= 0:
                             st.error("⚠️ Hata: Satış işlemi için fiyat 0'dan büyük olmalıdır!")
@@ -682,18 +588,25 @@ with tab1:
 
 with tab2:
     if st.button("🔄 Yenile"):
-        with st.spinner("Fon fiyatları güncelleniyor..."):
-            sonuc = refresh_fund_prices_in_sheet()
+        portfolio_tmp, _, _ = calculate_portfolio_unified(df)
+        active_fund_symbols = {
+            sym for sym, data in portfolio_tmp.items()
+            if data["Adet"] > 0 and data["Tur"] == "Fon"
+        }
 
-        st.cache_data.clear()
-        st.cache_resource.clear()
-
-        if sonuc["updated"] > 0:
-            st.success(f"{sonuc['updated']} fon güncellendi.")
-        elif sonuc["blocked"] > 0:
-            st.warning("TEFAS erişimi engelledi. Eski fiyatlar korunuyor.")
+        if not active_fund_symbols:
+            st.info("Güncellenecek aktif fon bulunamadı.")
         else:
-            st.info("Yeni veri alınamadı, eski fiyatlar korundu.")
+            with st.spinner("Fon fiyatları Fintables'tan güncelleniyor..."):
+                sonuc = refresh_fund_prices_in_sheet(active_fund_symbols)
+
+            st.cache_data.clear()
+            st.cache_resource.clear()
+
+            if sonuc["updated"] > 0:
+                st.success(f"✅ {sonuc['updated']} fon güncellendi.")
+            else:
+                st.warning(f"⚠️ Fiyat alınamadı ({sonuc['failed']} başarısız). Eski fiyatlar korunuyor.")
 
         st.rerun()
 
@@ -746,10 +659,8 @@ with tab2:
                 deger = net * guncel
                 kz = deger - em
                 kz_yuzde = (kz / em) * 100 if em > 0 else 0
-
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
-
                 gf_metin = f"{gf_tl:+,.0f} (%{gf_yuzde:+.2f})"
                 gunluk_toplam_tl += gf_tl
 
@@ -787,21 +698,11 @@ with tab2:
 
             c1, c2 = st.columns(2)
             with c1:
-                st.plotly_chart(px.pie(df_v, values='Değer (TL)', names='Varlık', hole=0.4), use_container_width=True)
+                st.plotly_chart(px.pie(df_v, values="Değer (TL)", names="Varlık", hole=0.4), use_container_width=True)
             with c2:
                 st.plotly_chart(
-                    px.bar(
-                        bench_df,
-                        x="Varlık",
-                        y="Değer (TL)",
-                        color="Varlık",
-                        text_auto='.2s',
-                        color_discrete_map={
-                            "Sizin Portföy": "#3498db",
-                            "Dolar Olsaydı": "#2ecc71",
-                            "Altın Olsaydı": "#f1c40f"
-                        }
-                    ),
+                    px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto=".2s",
+                           color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}),
                     use_container_width=True
                 )
 
@@ -844,17 +745,10 @@ with tab2:
 
             st.dataframe(
                 df_v.style.format({
-                    "Ort. Maliyet": "{:,.4f}",
-                    "Fiyat": "{:,.4f}",
-                    "Değer (TL)": "{:,.0f}",
-                    "K/Z (TL)": "{:+,.0f}",
-                    "K/Z (%)": "{:+.2f} %"
-                }).format({
-                    "Kalan Risk (TL)": format_risk
-                }).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark"]),
-                use_container_width=True,
-                hide_index=True,
-                column_config=cfg
+                    "Ort. Maliyet": "{:,.4f}", "Fiyat": "{:,.4f}",
+                    "Değer (TL)": "{:,.0f}", "K/Z (TL)": "{:+,.0f}", "K/Z (%)": "{:+.2f} %"
+                }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark"]),
+                use_container_width=True, hide_index=True, column_config=cfg
             )
 
 with tab3:
@@ -864,21 +758,20 @@ with tab3:
     if not df_hist.empty:
         df_hist["GenelKar"] = df_hist["ToplamVarlik"] - df_hist["NetAnaPara"]
         df_hist["AnlikKar"] = df_hist.apply(
-            lambda r: r["ToplamVarlik"] - r["ToplamMaliyet"] if r["ToplamMaliyet"] > 100 else 0,
-            axis=1
+            lambda r: r["ToplamVarlik"] - r["ToplamMaliyet"] if r["ToplamMaliyet"] > 100 else 0, axis=1
         )
 
         f1 = go.Figure()
-        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name='Toplam Servet', line=dict(color='#2ecc71', width=3)))
-        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name='İçerideki Ana Para', line=dict(color='gray', dash='dot')))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name="Toplam Servet", line=dict(color="#2ecc71", width=3)))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name="İçerideki Ana Para", line=dict(color="gray", dash="dot")))
         f1.update_layout(title="Toplam Varlık vs Ana Para", hovermode="x unified")
         st.plotly_chart(f1, use_container_width=True)
 
         st.divider()
 
         f2 = go.Figure()
-        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name='GENEL KÂR (Cepteki Dahil)', line=dict(color='#3498db', width=3)))
-        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"], name='ANLIK KÂR (Sadece Eldekiler)', line=dict(color='#f1c40f', width=2, dash='dash')))
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name="GENEL KÂR (Cepteki Dahil)", line=dict(color="#3498db", width=3)))
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"], name="ANLIK KÂR (Sadece Eldekiler)", line=dict(color="#f1c40f", width=2, dash="dash")))
         f2.update_layout(title="Kâr Analizi: Genel vs Anlık", hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
     else:
@@ -889,17 +782,15 @@ with tab3:
     df_assets = get_asset_history()
     if not df_assets.empty and len(df_assets.columns) > 1:
         st.subheader("📊 Varlık Bazında Kâr/Zarar (%) Gidişatı")
-        st.info("💡 Not: Grafik bugünden itibaren her gün varlıkların kapanış performansını işleyerek ilerleyecektir. Tamamen satılan varlıklar grafikten otomatik gizlenir.")
+        st.info("💡 Not: Grafik bugünden itibaren her gün varlıkların kapanış performansını işleyerek ilerleyecektir.")
 
         portfolio_gidisat, _, _ = calculate_portfolio_unified(df)
         aktif_semboller = [sym for sym, d in portfolio_gidisat.items() if d["Adet"] > 0]
-
         gosterilecek_kolonlar = ["Tarih"] + [c for c in df_assets.columns if c in aktif_semboller]
 
         if len(gosterilecek_kolonlar) > 1:
             df_assets_aktif = df_assets[gosterilecek_kolonlar]
             df_melted = df_assets_aktif.melt(id_vars=["Tarih"], var_name="Varlık", value_name="K/Z (%)")
-
             f3 = px.line(df_melted, x="Tarih", y="K/Z (%)", color="Varlık", markers=True)
             f3.add_hline(y=0, line_dash="dash", line_color="red")
             f3.update_layout(hovermode="x unified", yaxis_title="Kâr / Zarar (%)")
@@ -910,10 +801,8 @@ with tab3:
 with tab4:
     st.dataframe(
         df.sort_index(ascending=False).style.format({
-            "Fiyat": "{:,.4f}",
-            "Toplam": "{:,.2f}",
-            "Komisyon": "{:,.2f}",
-            "Adet": "{:.0f}"
+            "Fiyat": "{:,.4f}", "Toplam": "{:,.2f}",
+            "Komisyon": "{:,.2f}", "Adet": "{:.0f}"
         }),
         use_container_width=True
     )
