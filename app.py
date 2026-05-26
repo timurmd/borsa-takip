@@ -12,7 +12,7 @@ import requests
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v66")
+st.set_page_config(layout="wide", page_title="Portfoy v67")
 
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 JSON_FILE = "service_account.json"
@@ -23,7 +23,6 @@ FINTABLES_HEADERS = {
 }
 
 
-# --- YARDIMCI ---
 def safe_float(val):
     if val is None or val == "":
         return 0.0
@@ -58,7 +57,6 @@ def renk(val):
     return ""
 
 
-# --- GOOGLE BAĞLANTISI ---
 @st.cache_resource
 def init_connection():
     scopes = [
@@ -81,13 +79,8 @@ def init_connection():
         st.stop()
 
 
-# --- FON FİYATI (FİNTABLES) ---
 @st.cache_data(ttl=300)
 def get_fund_price_fintables(fon_kod):
-    """
-    Fintables API üzerinden fon fiyatı ve günlük değişim yüzdesi döndürür.
-    Dönüş: (fiyat: float, gunluk_pct: float)
-    """
     try:
         url = f"https://api.fintables.com/funds/{fon_kod.upper()}/price/"
         r = requests.get(url, headers=FINTABLES_HEADERS, timeout=8)
@@ -95,10 +88,7 @@ def get_fund_price_fintables(fon_kod):
             data = r.json()
             price = float(data.get("price", 0))
             prev_price = float(data.get("prev_price", 0))
-            if prev_price > 0:
-                gunluk_pct = ((price - prev_price) / prev_price) * 100
-            else:
-                gunluk_pct = 0.0
+            gunluk_pct = ((price - prev_price) / prev_price) * 100 if prev_price > 0 else 0.0
             return price, gunluk_pct
     except Exception as e:
         print(f"[Fintables] {fon_kod} hata: {e}")
@@ -106,11 +96,9 @@ def get_fund_price_fintables(fon_kod):
 
 
 def refresh_fund_prices_in_sheet(active_symbols=None):
-    """Aktif fon sembollerinin fiyatlarını Fintables'tan çekip Google Sheets'e yazar."""
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Fiyatlar")
     raw = sheet.get_all_values()
-
     if len(raw) < 2:
         return {"updated": 0, "failed": 0, "total": 0}
 
@@ -140,16 +128,10 @@ def refresh_fund_prices_in_sheet(active_symbols=None):
 
     if updates:
         sheet.update(f"B2:C{len(updates)+1}", updates, value_input_option="RAW")
-
-    sheet.update(
-        "B1:D1",
-        [["Fiyat", "Günlük %", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]]
-    )
-
+    sheet.update("B1:D1", [["Fiyat", "Günlük %", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]])
     return {"updated": updated_count, "failed": failed_count, "total": len(active_symbols)}
 
 
-# --- VERİ İŞLEMLERİ ---
 def get_data():
     client = init_connection()
     try:
@@ -174,7 +156,8 @@ def save_transaction(veri):
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
     row = [
         veri["Tarih"], veri["Tur"], veri["Islem"], veri["Sembol"], veri["Adet"],
-        str(veri["Fiyat"]).replace(".", ","), str(veri["Komisyon"]).replace(".", ","),
+        str(veri["Fiyat"]).replace(".", ","),
+        str(veri["Komisyon"]).replace(".", ","),
         str(veri["Toplam"]).replace(".", ",")
     ]
     sheet.append_row(row)
@@ -185,6 +168,119 @@ def save_transaction(veri):
             p_sheet.append_row([veri["Sembol"], 0, 0])
     except:
         pass
+
+
+def duzeltme_islemi_kaydet(tarih, sembol, mevcut_portfolio):
+    """
+    Kullanıcının girdiği güncel adet ve ortalama maliyeti,
+    mevcut portföy ile karşılaştırarak fark kadar Alış veya Satış satırı yazar.
+    """
+    st.markdown("#### 📐 Pozisyon Düzeltme")
+    st.caption("Bankadaki güncel durumu gir — sistem farkı otomatik hesaplar ve işlem olarak kaydeder.")
+
+    aktif_hisseler = {
+        sym: data for sym, data in mevcut_portfolio.items()
+        if data["Adet"] > 0 and data["Tur"] == "Hisse"
+    }
+
+    if not aktif_hisseler:
+        st.info("Portföyde aktif hisse senedi bulunamadı.")
+        return
+
+    sembol_sec = st.selectbox(
+        "Hisse Seç",
+        options=sorted(aktif_hisseler.keys()),
+        key="duz_sembol"
+    )
+
+    if sembol_sec:
+        mevcut_adet = aktif_hisseler[sembol_sec]["Adet"]
+        mevcut_maliyet = aktif_hisseler[sembol_sec]["Maliyet"]
+        mevcut_ort_maliyet = mevcut_maliyet / mevcut_adet if mevcut_adet > 0 else 0
+
+        st.info(f"**Mevcut kayıt:** {mevcut_adet:.0f} lot @ {mevcut_ort_maliyet:.4f} TL ortalama")
+
+        with st.form("duzeltme_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            yeni_adet = col1.number_input("Güncel Toplam Adet", min_value=0, step=1, value=int(mevcut_adet))
+            yeni_ort_maliyet = col2.number_input("Güncel Ortalama Maliyet (TL)", min_value=0.0, format="%.4f", value=float(mevcut_ort_maliyet))
+            duz_tarih = col3.date_input("Tarih", datetime.now())
+
+            kaydet = st.form_submit_button("DÜZELT VE KAYDET")
+
+            if kaydet:
+                yeni_toplam = yeni_adet * yeni_ort_maliyet
+                eski_toplam = mevcut_maliyet
+
+                fark_adet = yeni_adet - mevcut_adet
+                fark_toplam = yeni_toplam - eski_toplam
+
+                if abs(fark_adet) < 0.001 and abs(fark_toplam) < 0.01:
+                    st.warning("Değişiklik yok, kayıt yapılmadı.")
+                    return
+
+                if fark_adet > 0:
+                    islem = "Alış"
+                    islem_adet = fark_adet
+                    islem_toplam = fark_toplam
+                    islem_fiyat = fark_toplam / fark_adet if fark_adet > 0 else 0
+                elif fark_adet < 0:
+                    islem = "Satış"
+                    islem_adet = abs(fark_adet)
+                    islem_toplam = abs(fark_toplam)
+                    islem_fiyat = islem_toplam / islem_adet if islem_adet > 0 else 0
+                else:
+                    # Adet aynı ama maliyet değişmiş — sıfırla ve yeniden gir
+                    islem = "Düzeltme"
+                    islem_adet = yeni_adet
+                    islem_toplam = yeni_toplam
+                    islem_fiyat = yeni_ort_maliyet
+
+                if islem == "Düzeltme":
+                    # Eski satırları iptal et, yeni pozisyonu tek satır olarak yaz
+                    # Önce sıfırlama satırı (eski miktarda satış)
+                    sifir = {
+                        "Tarih": duz_tarih.strftime("%Y-%m-%d"),
+                        "Tur": "Hisse",
+                        "Islem": "Satış",
+                        "Sembol": sembol_sec,
+                        "Adet": mevcut_adet,
+                        "Fiyat": mevcut_ort_maliyet,
+                        "Komisyon": 0,
+                        "Toplam": mevcut_maliyet
+                    }
+                    # Sonra yeni pozisyon satırı (alış)
+                    yeni = {
+                        "Tarih": duz_tarih.strftime("%Y-%m-%d"),
+                        "Tur": "Hisse",
+                        "Islem": "Alış",
+                        "Sembol": sembol_sec,
+                        "Adet": yeni_adet,
+                        "Fiyat": yeni_ort_maliyet,
+                        "Komisyon": 0,
+                        "Toplam": yeni_toplam
+                    }
+                    with st.spinner("Kaydediliyor..."):
+                        save_transaction(sifir)
+                        save_transaction(yeni)
+                    st.success(f"✅ Maliyet düzeltmesi kaydedildi: {yeni_adet:.0f} lot @ {yeni_ort_maliyet:.4f} TL")
+                else:
+                    veri = {
+                        "Tarih": duz_tarih.strftime("%Y-%m-%d"),
+                        "Tur": "Hisse",
+                        "Islem": islem,
+                        "Sembol": sembol_sec,
+                        "Adet": islem_adet,
+                        "Fiyat": islem_fiyat,
+                        "Komisyon": 0,
+                        "Toplam": islem_toplam
+                    }
+                    with st.spinner("Kaydediliyor..."):
+                        save_transaction(veri)
+                    st.success(f"✅ {islem} kaydedildi: {islem_adet:.0f} lot @ {islem_fiyat:.4f} TL (fark)")
+
+                st.cache_data.clear()
+                st.rerun()
 
 
 def get_fund_data_from_sheet():
@@ -393,6 +489,26 @@ def calculate_benchmarks(df_transactions):
     return 0, 0, 0, 0
 
 
+def calculate_net_usd_cost(df_transactions):
+    m = get_historical_market_data()
+    if m.empty:
+        return 0
+    net_usd_cost = 0
+    df_s = df_transactions.sort_values("Tarih")
+    for _, r in df_s.iterrows():
+        try:
+            day = m.loc[m.index.asof(r["Tarih"].date())]
+            usd_rate = day["USD"]
+            amt = float(r["Toplam"])
+            if r["Islem"] == "Alış":
+                net_usd_cost += amt / usd_rate
+            else:
+                net_usd_cost -= amt / usd_rate
+        except:
+            continue
+    return net_usd_cost
+
+
 @st.cache_data(ttl=300)
 def get_stock_data_full(symbol):
     try:
@@ -508,83 +624,94 @@ except:
 tab1, tab2, tab3, tab4 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "📈 GİDİŞAT", "📋 GEÇMİŞ"])
 
 with tab1:
-    col_ekle, col_sil = st.columns([2, 1])
-    with col_ekle:
-        st.subheader("İşlem")
-        metod = st.radio("Yöntem:", ["Birim Fiyat", "Toplam Tutar"], horizontal=True)
-        with st.form("ekle", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            tur = c1.radio("Tür", ["Hisse Senedi", "Yatırım Fonu"], horizontal=True)
-            yon = c2.radio("Yön", ["Alış", "Satış"], horizontal=True)
-            ca, cb = st.columns(2)
-            tarih = ca.date_input("Tarih", datetime.now())
-            kod = cb.text_input("Kod").upper()
-            adet = st.number_input("Adet", min_value=1, step=1)
-            fiyat = 0.0
-            kom = 0.0
-            toplam = 0.0
-            cc, cd = st.columns(2)
-            if metod == "Birim Fiyat":
-                fiyat = cc.number_input("Fiyat", min_value=0.0, format="%.6f")
-                kom = cd.number_input("Komisyon", min_value=0.0, format="%.2f")
-            else:
-                toplam_girilen = cc.number_input("Net Tutar", min_value=0.0, format="%.2f")
+    mod = st.radio("Mod:", ["Yeni İşlem", "Pozisyon Düzelt"], horizontal=True)
+    st.divider()
 
-            if st.form_submit_button("KAYDET"):
-                if kod and adet > 0:
-                    hata = False
-                    if metod == "Birim Fiyat":
-                        if yon == "Satış" and fiyat <= 0:
-                            st.error("⚠️ Hata: Satış işlemi için fiyat 0'dan büyük olmalıdır!")
-                            hata = True
-                        elif fiyat >= 0:
-                            raw = adet * fiyat
-                            toplam = raw + kom if yon == "Alış" else raw - kom
+    if mod == "Yeni İşlem":
+        col_ekle, col_sil = st.columns([2, 1])
+        with col_ekle:
+            st.subheader("İşlem")
+            metod = st.radio("Yöntem:", ["Birim Fiyat", "Toplam Tutar"], horizontal=True)
+            with st.form("ekle", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                tur = c1.radio("Tür", ["Hisse Senedi", "Yatırım Fonu"], horizontal=True)
+                yon = c2.radio("Yön", ["Alış", "Satış"], horizontal=True)
+                ca, cb = st.columns(2)
+                tarih = ca.date_input("Tarih", datetime.now())
+                kod = cb.text_input("Kod").upper()
+                adet = st.number_input("Adet", min_value=1, step=1)
+                fiyat = 0.0
+                kom = 0.0
+                toplam = 0.0
+                cc, cd = st.columns(2)
+                if metod == "Birim Fiyat":
+                    fiyat = cc.number_input("Fiyat", min_value=0.0, format="%.6f")
+                    kom = cd.number_input("Komisyon", min_value=0.0, format="%.2f")
+                else:
+                    toplam_girilen = cc.number_input("Net Tutar", min_value=0.0, format="%.2f")
+
+                if st.form_submit_button("KAYDET"):
+                    if kod and adet > 0:
+                        hata = False
+                        if metod == "Birim Fiyat":
+                            if yon == "Satış" and fiyat <= 0:
+                                st.error("⚠️ Satış için fiyat 0'dan büyük olmalıdır!")
+                                hata = True
+                            elif fiyat >= 0:
+                                raw_t = adet * fiyat
+                                toplam = raw_t + kom if yon == "Alış" else raw_t - kom
+                            else:
+                                hata = True
                         else:
-                            hata = True
-                    else:
-                        if yon == "Satış" and toplam_girilen <= 0:
-                            st.error("⚠️ Hata: Satış işlemi için tutar 0'dan büyük olmalıdır!")
-                            hata = True
-                        elif toplam_girilen >= 0:
-                            toplam = toplam_girilen
-                            fiyat = (toplam_girilen / adet) if adet > 0 else 0
-                            kom = 0
-                        else:
-                            hata = True
+                            if yon == "Satış" and toplam_girilen <= 0:
+                                st.error("⚠️ Satış için tutar 0'dan büyük olmalıdır!")
+                                hata = True
+                            elif toplam_girilen >= 0:
+                                toplam = toplam_girilen
+                                fiyat = (toplam_girilen / adet) if adet > 0 else 0
+                                kom = 0
+                            else:
+                                hata = True
 
-                    if not hata:
-                        yeni = {
-                            "Tarih": tarih.strftime("%Y-%m-%d"),
-                            "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
-                            "Islem": yon,
-                            "Sembol": kod,
-                            "Adet": adet,
-                            "Fiyat": fiyat,
-                            "Komisyon": kom,
-                            "Toplam": toplam
-                        }
-                        with st.spinner("Kaydediliyor..."):
-                            save_transaction(yeni)
-                            st.success("Tamam!")
-                            st.cache_data.clear()
-                            st.rerun()
+                        if not hata:
+                            yeni = {
+                                "Tarih": tarih.strftime("%Y-%m-%d"),
+                                "Tur": "Hisse" if tur == "Hisse Senedi" else "Fon",
+                                "Islem": yon,
+                                "Sembol": kod,
+                                "Adet": adet,
+                                "Fiyat": fiyat,
+                                "Komisyon": kom,
+                                "Toplam": toplam
+                            }
+                            with st.spinner("Kaydediliyor..."):
+                                save_transaction(yeni)
+                                st.success("Tamam!")
+                                st.cache_data.clear()
+                                st.rerun()
 
-    with col_sil:
-        st.subheader("Sil")
-        try:
-            df_sil = get_data()
-            if not df_sil.empty:
-                st.dataframe(df_sil.tail(5)[["Sembol", "Islem", "Toplam"]], use_container_width=True)
-                secilen = st.selectbox("ID:", df_sil.index.sort_values(ascending=False))
-                if st.button("Sil"):
-                    client = init_connection()
-                    client.open_by_key(SHEET_ID).worksheet("Islemler").delete_rows(int(secilen) + 2)
-                    st.success("Silindi!")
-                    st.cache_data.clear()
-                    st.rerun()
-        except:
-            pass
+        with col_sil:
+            st.subheader("Sil")
+            try:
+                df_sil = get_data()
+                if not df_sil.empty:
+                    st.dataframe(df_sil.tail(5)[["Sembol", "Islem", "Toplam"]], use_container_width=True)
+                    secilen = st.selectbox("ID:", df_sil.index.sort_values(ascending=False))
+                    if st.button("Sil"):
+                        client = init_connection()
+                        client.open_by_key(SHEET_ID).worksheet("Islemler").delete_rows(int(secilen) + 2)
+                        st.success("Silindi!")
+                        st.cache_data.clear()
+                        st.rerun()
+            except:
+                pass
+
+    else:  # Pozisyon Düzelt
+        if df.empty:
+            st.info("Henüz işlem kaydı yok.")
+        else:
+            portfolio_tmp, _, _ = calculate_portfolio_unified(df)
+            duzeltme_islemi_kaydet(datetime.now(), None, portfolio_tmp)
 
 with tab2:
     if st.button("🔄 Yenile"):
