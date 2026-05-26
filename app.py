@@ -265,10 +265,10 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
 
     expected_header = ["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara", "Nakit"]
     current_header = sheet.row_values(1)
-    # Nakit sütunu eksikse sadece onu ekle, diğerlerine dokunma
+    # Nakit sütunu eksikse header satırını toplu güncelle
     if "Nakit" not in current_header:
-        next_col = len(current_header) + 1
-        sheet.update_cell(1, next_col, "Nakit")
+        new_header = current_header + ["Nakit"]
+        sheet.update(f"A1:{chr(64+len(new_header))}1", [new_header])
 
     # Güncel header'ı tekrar oku (Nakit eklendiyse dahil)
     current_header = sheet.row_values(1)
