@@ -259,14 +259,20 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
         except:
             sheet = client.open_by_key(SHEET_ID).add_worksheet("Gecmis", 1000, 6)
             sheet.append_row(["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara", "Nakit"])
+            return  # yeni sayfa, devam et
     except:
         return
 
     expected_header = ["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara", "Nakit"]
     current_header = sheet.row_values(1)
-    if current_header != expected_header:
-        for i, val in enumerate(expected_header):
-            sheet.update_cell(1, i + 1, val)
+    # Nakit sütunu eksikse sadece onu ekle, diğerlerine dokunma
+    if "Nakit" not in current_header:
+        next_col = len(current_header) + 1
+        sheet.update_cell(1, next_col, "Nakit")
+
+    # Güncel header'ı tekrar oku (Nakit eklendiyse dahil)
+    current_header = sheet.row_values(1)
+    nakit_col = current_header.index("Nakit") + 1 if "Nakit" in current_header else None
 
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
@@ -274,15 +280,17 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
          str(tv).replace(".", ","),
          str(tm).replace(".", ","),
          str(dk).replace(".", ","),
-         str(net_ana).replace(".", ","),
-         str(nakit).replace(".", ",")]
+         str(net_ana).replace(".", ",")]
 
     if bugun not in dates:
-        sheet.append_row(d)
+        row_to_write = d + ([str(nakit).replace(".", ",")] if nakit_col else [])
+        sheet.append_row(row_to_write)
     else:
         idx = dates.index(bugun) + 1
         for i, val in enumerate(d[1:]):
             sheet.update_cell(idx, i + 2, val)
+        if nakit_col:
+            sheet.update_cell(idx, nakit_col, str(nakit).replace(".", ","))
 
 
 def save_asset_snapshots(liste):
