@@ -690,6 +690,9 @@ with tab1:
 
 # ================================================================
 with tab2:
+    portfolio_debug, _, _ = calculate_portfolio_unified(df)
+    if "EREGL" in portfolio_debug:
+        st.write(portfolio_debug["EREGL"])
     if st.button("🔄 Yenile"):
         portfolio_tmp, _, _ = calculate_portfolio_unified(df)
         active_fund_symbols = {
