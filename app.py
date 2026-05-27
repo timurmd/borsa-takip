@@ -174,6 +174,10 @@ def save_transaction(veri):
             p_sheet.append_row([veri["Sembol"], 0, 0])
     except:
         pass
+    # Satış işleminde otomatik nakit girişi
+    if veri["Islem"] == "Satış" and float(veri["Toplam"]) > 0:
+        aciklama = f"{veri['Sembol']} satış geliri"
+        save_nakit(veri["Tarih"], aciklama, float(veri["Toplam"]), "Giriş")
 
 
 # --- NAKİT ---
@@ -979,11 +983,17 @@ with tab4:
         df_hist["AnlikKar"] = df_hist.apply(
             lambda r: r["ToplamVarlik"] - r["ToplamMaliyet"] if r["ToplamMaliyet"] > 100 else 0, axis=1
         )
-        df_hist["ToplamServet"] = df_hist["ToplamVarlik"] + df_hist.get("Nakit", 0)
+        # Nakit sütunu 0 olan eski satırlar için: o günkü nakiti bilmiyoruz,
+    # grafik bozulmasın diye Nakit=0 olan satırlara güncel bakiyeyi koyma,
+    # sadece gerçekten girilmiş satırları kullan
+    df_hist["ToplamServet"] = df_hist["ToplamVarlik"] + df_hist["Nakit"]
 
+        # Nakit verisi olan satırlar için Toplam Servet, olmayanlar için sadece Portföy
+        df_nakit_var = df_hist[df_hist["Nakit"] > 0].copy()
         f1 = go.Figure()
-        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamServet"], name="Toplam Servet (Nakit Dahil)", line=dict(color="#2ecc71", width=3)))
-        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name="Portföy Değeri", line=dict(color="#3498db", width=2, dash="dot")))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name="Portföy Değeri", line=dict(color="#3498db", width=2)))
+        if not df_nakit_var.empty:
+            f1.add_trace(go.Scatter(x=df_nakit_var["Tarih"], y=df_nakit_var["ToplamServet"], name="Toplam Servet (Nakit Dahil)", line=dict(color="#2ecc71", width=3)))
         f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name="İçerideki Ana Para", line=dict(color="gray", dash="dot")))
         f1.update_layout(title="Toplam Servet vs Portföy vs Ana Para", hovermode="x unified")
         st.plotly_chart(f1, use_container_width=True)
