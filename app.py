@@ -481,6 +481,10 @@ def calculate_portfolio_unified(df):
             portfolio[sym]["Maliyet"] = 0
             portfolio[sym]["NetGiris"] = 0
             portfolio[sym]["Alimlar"] = []
+        # Pozisyon devam ediyor ama NetGiris negatife düştüyse sıfırla
+        # (kar realizasyonu yapılmış, kalan risk = 0 yani BEDAVA)
+        if portfolio[sym]["NetGiris"] < 0:
+            portfolio[sym]["NetGiris"] = 0
     return portfolio, toplam_giren, toplam_cikan
 
 
