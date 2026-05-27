@@ -780,7 +780,22 @@ with tab2:
             if nakit_bakiye > 0:
                 pie_df = pd.concat([pie_df, pd.DataFrame([{"Varlık": "💵 Nakit", "Değer (TL)": nakit_bakiye}])], ignore_index=True)
 
-            st.plotly_chart(px.pie(pie_df, values="Değer (TL)", names="Varlık", hole=0.4), use_container_width=True)
+            fig_pie = px.pie(
+                pie_df, values="Değer (TL)", names="Varlık",
+                hole=0.45,
+            )
+            fig_pie.update_traces(
+                textposition="outside",
+                texttemplate="<b>%{label}</b><br>%{percent:.1%}",
+                hovertemplate="<b>%{label}</b><br>%{value:,.0f} ₺<br>%{percent:.1%}<extra></extra>",
+                pull=[0.03] * len(pie_df),
+            )
+            fig_pie.update_layout(
+                showlegend=False,
+                margin=dict(t=40, b=40, l=40, r=40),
+                height=480,
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
 
             anlik_kz = toplam_portfoy_degeri - toplam_maliyet
             anlik_ky = (anlik_kz / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
