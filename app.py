@@ -776,24 +776,11 @@ with tab2:
             genel_kar = toplam_portfoy_degeri - net_ana_para_tl
             genel_ky = (genel_kar / net_ana_para_tl) * 100 if net_ana_para_tl > 0 else 0
 
-            bench_df = pd.DataFrame({
-                "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
-                "Değer (TL)": [toplam_servet, alt_usd, alt_gold],
-            })
-
             pie_df = df_v[["Varlık", "Değer (TL)"]].copy()
             if nakit_bakiye > 0:
                 pie_df = pd.concat([pie_df, pd.DataFrame([{"Varlık": "💵 Nakit", "Değer (TL)": nakit_bakiye}])], ignore_index=True)
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(px.pie(pie_df, values="Değer (TL)", names="Varlık", hole=0.4), use_container_width=True)
-            with c2:
-                st.plotly_chart(
-                    px.bar(bench_df, x="Varlık", y="Değer (TL)", color="Varlık", text_auto=".2s",
-                           color_discrete_map={"Sizin Portföy": "#3498db", "Dolar Olsaydı": "#2ecc71", "Altın Olsaydı": "#f1c40f"}),
-                    use_container_width=True
-                )
+            st.plotly_chart(px.pie(pie_df, values="Değer (TL)", names="Varlık", hole=0.4), use_container_width=True)
 
             anlik_kz = toplam_portfoy_degeri - toplam_maliyet
             anlik_ky = (anlik_kz / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
