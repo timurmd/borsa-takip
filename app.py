@@ -778,7 +778,7 @@ with tab2:
 
             bench_df = pd.DataFrame({
                 "Varlık": ["Sizin Portföy", "Dolar Olsaydı", "Altın Olsaydı"],
-                "Değer (TL)": [toplam_portfoy_degeri, alt_usd, alt_gold],
+                "Değer (TL)": [toplam_servet, alt_usd, alt_gold],
             })
 
             pie_df = df_v[["Varlık", "Değer (TL)"]].copy()
