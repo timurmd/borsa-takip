@@ -452,8 +452,9 @@ def calculate_portfolio_unified(df):
         qty = float(row["Adet"])
         total = float(row["Toplam"])
         tarih = row["Tarih"]
-        is_alis = islem.strip().lower() in ["alış", "alis", "al"]
-        is_satis = islem.strip().lower() in ["satış", "satis", "sat"]
+        islem_norm = islem.strip().lower().replace("ı", "i").replace("ş", "s").replace("ç", "c").replace("ğ", "g").replace("ü", "u").replace("ö", "o")
+        is_alis = islem_norm in ["alis", "al"]
+        is_satis = islem_norm in ["satis", "sat"]
 
         if is_alis:
             toplam_giren += total
@@ -690,9 +691,6 @@ with tab1:
 
 # ================================================================
 with tab2:
-    portfolio_debug, _, _ = calculate_portfolio_unified(df)
-    if "EREGL" in portfolio_debug:
-        st.write(portfolio_debug["EREGL"])
     if st.button("🔄 Yenile"):
         portfolio_tmp, _, _ = calculate_portfolio_unified(df)
         active_fund_symbols = {
