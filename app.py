@@ -687,6 +687,8 @@ with tab1:
 
 # ================================================================
 with tab2:
+    df_test = df[df["Sembol"] == "EREGL"]
+    st.write(df_test[["Tarih","Tur","Islem","Adet","Toplam"]])
     if st.button("🔄 Yenile"):
         portfolio_tmp, _, _ = calculate_portfolio_unified(df)
         active_fund_symbols = {
