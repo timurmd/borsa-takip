@@ -452,18 +452,21 @@ def calculate_portfolio_unified(df):
         qty = float(row["Adet"])
         total = float(row["Toplam"])
         tarih = row["Tarih"]
-        if islem == "Alış":
+        is_alis = islem.strip().lower() in ["alış", "alis", "al"]
+        is_satis = islem.strip().lower() in ["satış", "satis", "sat"]
+
+        if is_alis:
             toplam_giren += total
         else:
             toplam_cikan += total
         if sym not in portfolio:
             portfolio[sym] = {"Adet": 0, "Maliyet": 0, "NetGiris": 0.0, "Tur": typ, "Alimlar": []}
-        if islem == "Alış":
+        if is_alis:
             portfolio[sym]["Adet"] += qty
             portfolio[sym]["Maliyet"] += total
             portfolio[sym]["NetGiris"] += total
             portfolio[sym]["Alimlar"].append({"adet": qty, "tarih": tarih})
-        elif islem == "Satış":
+        elif is_satis:
             if portfolio[sym]["Adet"] > 0:
                 avg_cost = portfolio[sym]["Maliyet"] / portfolio[sym]["Adet"]
                 portfolio[sym]["Maliyet"] -= (qty * avg_cost)
@@ -687,8 +690,6 @@ with tab1:
 
 # ================================================================
 with tab2:
-    df_test = df[df["Sembol"] == "EREGL"]
-    st.write(df_test[["Tarih","Tur","Islem","Adet","Toplam"]])
     if st.button("🔄 Yenile"):
         portfolio_tmp, _, _ = calculate_portfolio_unified(df)
         active_fund_symbols = {
