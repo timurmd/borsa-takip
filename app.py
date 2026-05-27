@@ -38,6 +38,25 @@ def safe_float(val):
         return 0.0
 
 
+def safe_adet(val):
+    """Adet için özel parser — 2.000 gibi binlik ayırıcılı sayıları doğru okur."""
+    if val is None or val == "":
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    val_str = str(val).strip().replace("\xa0", "").replace(" ", "")
+    if "," in val_str:
+        # Türkçe format: 2.000,50 → virgül ondalık
+        val_str = val_str.replace(".", "").replace(",", ".")
+    else:
+        # Sadece nokta var — binlik ayırıcı olarak kabul et: 2.000 → 2000
+        val_str = val_str.replace(".", "")
+    try:
+        return float(val_str)
+    except:
+        return 0.0
+
+
 def renk(val):
     c = ""
     if isinstance(val, (int, float)):
@@ -185,7 +204,9 @@ def get_data():
         if len(raw) < 2:
             return pd.DataFrame()
         df = pd.DataFrame(raw[1:], columns=raw[0])
-        for c in ["Adet", "Fiyat", "Komisyon", "Toplam"]:
+        if "Adet" in df.columns:
+            df["Adet"] = df["Adet"].apply(safe_adet)
+        for c in ["Fiyat", "Komisyon", "Toplam"]:
             if c in df.columns:
                 df[c] = df[c].apply(safe_float)
         df["Tarih"] = pd.to_datetime(df["Tarih"], dayfirst=False, errors="coerce")
@@ -200,8 +221,10 @@ def get_data():
 def save_transaction(veri):
     client = init_connection()
     sheet = client.open_by_key(SHEET_ID).worksheet("Islemler")
+    # Sheets'e yazarken Türkçe karakter sorununu önlemek için normalize et
+    islem_yaz = "Alis" if veri["Islem"] in ["Alış", "Alis"] else "Satis"
     row = [
-        veri["Tarih"], veri["Tur"], veri["Islem"], veri["Sembol"], veri["Adet"],
+        veri["Tarih"], veri["Tur"], islem_yaz, veri["Sembol"], veri["Adet"],
         str(veri["Fiyat"]).replace(".", ","),
         str(veri["Komisyon"]).replace(".", ","),
         str(veri["Toplam"]).replace(".", ",")
@@ -436,7 +459,7 @@ def get_usd_rate():
 
 def calculate_portfolio_unified(df):
     portfolio = {}
-    df = df.sort_values("Tarih")
+    df = df.sort_values("Tarih", kind="mergesort")
     toplam_giren = 0
     toplam_cikan = 0
     for _, row in df.iterrows():
