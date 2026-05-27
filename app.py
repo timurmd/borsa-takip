@@ -796,8 +796,9 @@ with tab2:
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl, nakit_bakiye)
             save_asset_snapshots(liste)
 
-            genel_kar = toplam_portfoy_degeri - toplam_maliyet
-            genel_ky = (genel_kar / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
+            # Genel Kar = şu anki portföy + realize edilen karlar - toplam yatırılan
+            genel_kar = toplam_portfoy_degeri + t_cikan - t_giren
+            genel_ky = (genel_kar / t_giren) * 100 if t_giren > 0 else 0
 
             pie_df = df_v[["Varlık", "Değer (TL)"]].copy()
             if nakit_bakiye > 0:
