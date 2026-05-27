@@ -773,8 +773,8 @@ with tab2:
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, net_ana_para_tl, nakit_bakiye)
             save_asset_snapshots(liste)
 
-            genel_kar = toplam_portfoy_degeri - net_ana_para_tl
-            genel_ky = (genel_kar / net_ana_para_tl) * 100 if net_ana_para_tl > 0 else 0
+            genel_kar = toplam_portfoy_degeri - toplam_maliyet
+            genel_ky = (genel_kar / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
 
             pie_df = df_v[["Varlık", "Değer (TL)"]].copy()
             if nakit_bakiye > 0:
@@ -810,7 +810,7 @@ with tab2:
 
             k4, k5, k6 = st.columns(3)
             k4.metric("Günlük Fark", f"{gunluk_toplam_tl:+,.0f} ₺")
-            k5.metric("Net Ana Para (Riskli)", f"{net_ana_para_tl:,.0f} ₺", f"Dolar Maliyeti: ${net_ana_para_usd_maliyeti:,.0f}", delta_color="off")
+            k5.metric("Borsadaki Maliyet", f"{toplam_maliyet:,.0f} ₺", "Eldeki varlıkların alış maliyeti", delta_color="off")
             k6.metric("GENEL KAR", f"{genel_kar:+,.0f} ₺", f"%{genel_ky:.1f} (Ana Paraya Göre)")
 
             st.divider()
