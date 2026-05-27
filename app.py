@@ -191,6 +191,13 @@ def get_data():
         df["Tarih"] = pd.to_datetime(df["Tarih"], dayfirst=False, errors="coerce")
         if "Sembol" in df.columns:
             df["Sembol"] = df["Sembol"].astype(str).str.strip().str.upper().str.replace(".IS", "")
+        # Türkçe karakter normalizasyonu — Satış/Alış encoding sorunlarını önler
+        if "Islem" in df.columns:
+            df["Islem"] = df["Islem"].astype(str).str.strip()
+            df["Islem"] = df["Islem"].replace({
+                "Sati\u015f": "Satış", "satis": "Satış", "SATIŞ": "Satış", "Satis": "Satış",
+                "Ali\u015f": "Alış", "alis": "Alış", "ALIŞ": "Alış"
+            })
         return df
     except:
         return pd.DataFrame()
