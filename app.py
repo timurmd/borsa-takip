@@ -12,7 +12,7 @@ import requests
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="Portfoy v68")
+st.set_page_config(layout="wide", page_title="Portfoy v69")
 
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 JSON_FILE = "service_account.json"
@@ -58,7 +58,6 @@ def renk(val):
 
 
 def sembol_tur_belirle(sembol):
-    """3 harf ise Fon, değilse Hisse."""
     return "Fon" if len(sembol.strip()) == 3 else "Hisse"
 
 
@@ -106,35 +105,75 @@ def refresh_fund_prices_in_sheet(active_symbols=None):
     raw = sheet.get_all_values()
     if len(raw) < 2:
         return {"updated": 0, "failed": 0, "total": 0}
-
     active_symbols = set(active_symbols or [])
     updates = []
     updated_count = 0
     failed_count = 0
-
     for row in raw[1:]:
         symbol = str(row[0]).strip().upper() if len(row) > 0 else ""
         old_price = row[1] if len(row) > 1 and row[1] else "0"
         old_pct = row[2] if len(row) > 2 and row[2] else "0"
         new_row = [old_price, old_pct]
-
         if symbol and symbol in active_symbols:
             price, pct = get_fund_price_fintables(symbol)
             if price > 0:
-                new_row = [
-                    str(price).replace(".", ","),
-                    str(round(pct, 4)).replace(".", ",")
-                ]
+                new_row = [str(price).replace(".", ","), str(round(pct, 4)).replace(".", ",")]
                 updated_count += 1
             else:
                 failed_count += 1
-
         updates.append(new_row)
-
     if updates:
         sheet.update(f"B2:C{len(updates)+1}", updates, value_input_option="RAW")
     sheet.update("B1:D1", [["Fiyat", "Günlük %", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]])
     return {"updated": updated_count, "failed": failed_count, "total": len(active_symbols)}
+
+
+# --- NAKİT ---
+def get_nakit_data():
+    client = init_connection()
+    try:
+        try:
+            sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
+        except:
+            sheet = client.open_by_key(SHEET_ID).add_worksheet("Nakit", 1000, 4)
+            sheet.append_row(["Tarih", "Aciklama", "Tutar", "Tip"])
+            return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
+        raw = sheet.get_all_values()
+        if len(raw) < 2:
+            return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
+        df = pd.DataFrame(raw[1:], columns=raw[0])
+        df["Tutar"] = df["Tutar"].apply(safe_float)
+        df["Tarih"] = pd.to_datetime(df["Tarih"], errors="coerce")
+        return df.dropna(subset=["Tarih"]).sort_values("Tarih")
+    except:
+        return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
+
+
+def save_nakit(tarih, aciklama, tutar, tip):
+    client = init_connection()
+    try:
+        try:
+            sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
+        except:
+            sheet = client.open_by_key(SHEET_ID).add_worksheet("Nakit", 1000, 4)
+            sheet.append_row(["Tarih", "Aciklama", "Tutar", "Tip"])
+        sheet.append_row([tarih, aciklama, str(tutar).replace(".", ","), tip])
+    except Exception as e:
+        st.error(f"Nakit kayıt hatası: {e}")
+
+
+def delete_nakit_row(row_index):
+    client = init_connection()
+    sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
+    sheet.delete_rows(row_index + 2)
+
+
+def get_nakit_bakiye(df_nakit):
+    if df_nakit.empty:
+        return 0.0
+    girdi = df_nakit[df_nakit["Tip"] == "Giriş"]["Tutar"].sum()
+    cikti = df_nakit[df_nakit["Tip"] == "Çıkış"]["Tutar"].sum()
+    return girdi - cikti
 
 
 # --- ANA VERİ ---
@@ -174,68 +213,11 @@ def save_transaction(veri):
             p_sheet.append_row([veri["Sembol"], 0, 0])
     except:
         pass
-    # Satış işleminde otomatik nakit girişi
+    # Satışta otomatik nakit girişi
     if veri["Islem"] == "Satış" and float(veri["Toplam"]) > 0:
-        aciklama = f"{veri['Sembol']} satış geliri"
-        save_nakit(veri["Tarih"], aciklama, float(veri["Toplam"]), "Giriş")
+        save_nakit(veri["Tarih"], f"{veri['Sembol']} satış geliri", float(veri["Toplam"]), "Giriş")
 
 
-# --- NAKİT ---
-def get_nakit_data():
-    client = init_connection()
-    try:
-        try:
-            sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
-        except:
-            sheet = client.open_by_key(SHEET_ID).add_worksheet("Nakit", 1000, 4)
-            sheet.append_row(["Tarih", "Aciklama", "Tutar", "Tip"])
-            return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
-
-        raw = sheet.get_all_values()
-        if len(raw) < 2:
-            return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
-
-        df = pd.DataFrame(raw[1:], columns=raw[0])
-        df["Tutar"] = df["Tutar"].apply(safe_float)
-        df["Tarih"] = pd.to_datetime(df["Tarih"], errors="coerce")
-        return df.dropna(subset=["Tarih"]).sort_values("Tarih")
-    except:
-        return pd.DataFrame(columns=["Tarih", "Aciklama", "Tutar", "Tip"])
-
-
-def save_nakit(tarih, aciklama, tutar, tip):
-    client = init_connection()
-    try:
-        try:
-            sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
-        except:
-            sheet = client.open_by_key(SHEET_ID).add_worksheet("Nakit", 1000, 4)
-            sheet.append_row(["Tarih", "Aciklama", "Tutar", "Tip"])
-        sheet.append_row([
-            tarih,
-            aciklama,
-            str(tutar).replace(".", ","),
-            tip
-        ])
-    except Exception as e:
-        st.error(f"Nakit kayıt hatası: {e}")
-
-
-def delete_nakit_row(row_index):
-    client = init_connection()
-    sheet = client.open_by_key(SHEET_ID).worksheet("Nakit")
-    sheet.delete_rows(row_index + 2)  # header + 1-indexed
-
-
-def get_nakit_bakiye(df_nakit):
-    if df_nakit.empty:
-        return 0.0
-    girdi = df_nakit[df_nakit["Tip"] == "Giriş"]["Tutar"].sum()
-    cikti = df_nakit[df_nakit["Tip"] == "Çıkış"]["Tutar"].sum()
-    return girdi - cikti
-
-
-# --- PORTFÖY HESAPLAMA ---
 def get_fund_data_from_sheet():
     client = init_connection()
     try:
@@ -263,20 +245,17 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
         except:
             sheet = client.open_by_key(SHEET_ID).add_worksheet("Gecmis", 1000, 6)
             sheet.append_row(["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara", "Nakit"])
-            return  # yeni sayfa, devam et
     except:
         return
 
-    expected_header = ["Tarih", "ToplamVarlik", "ToplamMaliyet", "DolarKuru", "NetAnaPara", "Nakit"]
+    # Nakit sütunu yoksa ekle
     current_header = sheet.row_values(1)
-    # Nakit sütunu eksikse header satırını toplu güncelle
     if "Nakit" not in current_header:
         new_header = current_header + ["Nakit"]
-        sheet.update(f"A1:{chr(64+len(new_header))}1", [new_header])
+        sheet.update("A1:" + chr(64 + len(new_header)) + "1", [new_header])
+        current_header = new_header
 
-    # Güncel header'ı tekrar oku (Nakit eklendiyse dahil)
-    current_header = sheet.row_values(1)
-    nakit_col = current_header.index("Nakit") + 1 if "Nakit" in current_header else None
+    nakit_col = current_header.index("Nakit") + 1
 
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
@@ -287,14 +266,12 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
          str(net_ana).replace(".", ",")]
 
     if bugun not in dates:
-        row_to_write = d + ([str(nakit).replace(".", ",")] if nakit_col else [])
-        sheet.append_row(row_to_write)
+        sheet.append_row(d + [str(nakit).replace(".", ",")])
     else:
         idx = dates.index(bugun) + 1
         for i, val in enumerate(d[1:]):
             sheet.update_cell(idx, i + 2, val)
-        if nakit_col:
-            sheet.update_cell(idx, nakit_col, str(nakit).replace(".", ","))
+        sheet.update_cell(idx, nakit_col, str(nakit).replace(".", ","))
 
 
 def save_asset_snapshots(liste):
@@ -306,28 +283,22 @@ def save_asset_snapshots(liste):
         except:
             sheet = client.open_by_key(SHEET_ID).add_worksheet("VarlikKari", 1000, 26)
             sheet.append_row(["Tarih"])
-
         headers = sheet.row_values(1)
         if not headers:
             headers = ["Tarih"]
-
         data_dict = {item["Varlık"]: str(item["K/Z (%)"]).replace(".", ",") for item in liste}
-
         added_header = False
         for sym in data_dict.keys():
             if sym not in headers:
                 headers.append(sym)
                 added_header = True
-
         if added_header:
             for c_idx, h_val in enumerate(headers):
                 sheet.update_cell(1, c_idx + 1, h_val)
-
         dates = sheet.col_values(1)
         row_data = [bugun]
         for h in headers[1:]:
             row_data.append(data_dict.get(h, "0"))
-
         if bugun not in dates:
             sheet.append_row(row_data)
         else:
@@ -542,36 +513,35 @@ def duzeltme_islemi_kaydet(mevcut_portfolio):
                 if abs(fark_adet) < 0.001 and abs(fark_toplam) < 0.01:
                     st.warning("Değişiklik yok, kayıt yapılmadı.")
                     return
-                if fark_adet > 0:
-                    islem = "Alış"
-                    islem_adet = fark_adet
-                    islem_toplam = fark_toplam
-                    islem_fiyat = fark_toplam / fark_adet if fark_adet > 0 else 0
-                elif fark_adet < 0:
-                    islem = "Satış"
-                    islem_adet = abs(fark_adet)
-                    islem_toplam = abs(fark_toplam)
-                    islem_fiyat = islem_toplam / islem_adet if islem_adet > 0 else 0
-                else:
+                tarih_str = duz_tarih.strftime("%Y-%m-%d")
+                if fark_adet == 0:
+                    sifir = {"Tarih": tarih_str, "Tur": "Hisse", "Islem": "Satış",
+                             "Sembol": sembol_sec, "Adet": mevcut_adet, "Fiyat": mevcut_ort_maliyet,
+                             "Komisyon": 0, "Toplam": mevcut_maliyet}
+                    yeni_r = {"Tarih": tarih_str, "Tur": "Hisse", "Islem": "Alış",
+                              "Sembol": sembol_sec, "Adet": yeni_adet, "Fiyat": yeni_ort_maliyet,
+                              "Komisyon": 0, "Toplam": yeni_toplam}
                     with st.spinner("Kaydediliyor..."):
-                        sifir = {"Tarih": duz_tarih.strftime("%Y-%m-%d"), "Tur": "Hisse", "Islem": "Satış",
-                                 "Sembol": sembol_sec, "Adet": mevcut_adet, "Fiyat": mevcut_ort_maliyet,
-                                 "Komisyon": 0, "Toplam": mevcut_maliyet}
-                        yeni_r = {"Tarih": duz_tarih.strftime("%Y-%m-%d"), "Tur": "Hisse", "Islem": "Alış",
-                                  "Sembol": sembol_sec, "Adet": yeni_adet, "Fiyat": yeni_ort_maliyet,
-                                  "Komisyon": 0, "Toplam": yeni_toplam}
                         save_transaction(sifir)
                         save_transaction(yeni_r)
                     st.success(f"✅ Maliyet düzeltmesi kaydedildi: {yeni_adet:.0f} lot @ {yeni_ort_maliyet:.4f} TL")
-                    st.cache_data.clear()
-                    st.rerun()
-                    return
-                veri = {"Tarih": duz_tarih.strftime("%Y-%m-%d"), "Tur": "Hisse", "Islem": islem,
-                        "Sembol": sembol_sec, "Adet": islem_adet, "Fiyat": islem_fiyat,
-                        "Komisyon": 0, "Toplam": islem_toplam}
-                with st.spinner("Kaydediliyor..."):
-                    save_transaction(veri)
-                st.success(f"✅ {islem} kaydedildi: {islem_adet:.0f} lot @ {islem_fiyat:.4f} TL (fark)")
+                else:
+                    if fark_adet > 0:
+                        islem = "Alış"
+                        islem_adet = fark_adet
+                        islem_toplam = fark_toplam
+                        islem_fiyat = fark_toplam / fark_adet
+                    else:
+                        islem = "Satış"
+                        islem_adet = abs(fark_adet)
+                        islem_toplam = abs(fark_toplam)
+                        islem_fiyat = islem_toplam / islem_adet
+                    veri = {"Tarih": tarih_str, "Tur": "Hisse", "Islem": islem,
+                            "Sembol": sembol_sec, "Adet": islem_adet, "Fiyat": islem_fiyat,
+                            "Komisyon": 0, "Toplam": islem_toplam}
+                    with st.spinner("Kaydediliyor..."):
+                        save_transaction(veri)
+                    st.success(f"✅ {islem} kaydedildi: {islem_adet:.0f} lot @ {islem_fiyat:.4f} TL")
                 st.cache_data.clear()
                 st.rerun()
 
@@ -609,7 +579,6 @@ try:
 except:
     st.stop()
 
-# Mevcut semboller (kod önerisi için)
 mevcut_semboller = sorted(df["Sembol"].dropna().unique().tolist()) if not df.empty else []
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ EKLE", "📊 PORTFÖY", "💵 NAKİT", "📈 GİDİŞAT", "📋 GEÇMİŞ"])
@@ -628,23 +597,15 @@ with tab1:
                 yon = st.radio("Yön", ["Alış", "Satış"], horizontal=True)
                 ca, cb = st.columns(2)
                 tarih = ca.date_input("Tarih", datetime.now())
-
-                # Kod alanı: mevcut semboller + serbest giriş
                 kod_options = ["— Yeni sembol gir —"] + mevcut_semboller
-                kod_sec = cb.selectbox("Sembol Seç / Yeni Gir", kod_options, key="kod_sec")
-
+                kod_sec = cb.selectbox("Sembol Seç / Yeni Gir", kod_options)
                 if kod_sec == "— Yeni sembol gir —":
                     kod = st.text_input("Yeni Sembol Kodu").strip().upper()
                 else:
                     kod = kod_sec
-
-                # Otomatik tür belirleme
                 if kod:
                     tur_auto = sembol_tur_belirle(kod)
-                    st.caption(f"📌 Tür otomatik belirlendi: **{tur_auto}** ({'3 harf = Fon' if tur_auto == 'Fon' else '3 harften fazla = Hisse'})")
-                else:
-                    tur_auto = "Hisse"
-
+                    st.caption(f"📌 Tür: **{tur_auto}** ({'3 harf = Fon' if tur_auto == 'Fon' else '3 harften fazla = Hisse'})")
                 adet = st.number_input("Adet", min_value=1, step=1)
                 fiyat = 0.0
                 kom = 0.0
@@ -678,17 +639,12 @@ with tab1:
                                 kom = 0
                             else:
                                 hata = True
-
                         if not hata:
                             yeni = {
                                 "Tarih": tarih.strftime("%Y-%m-%d"),
                                 "Tur": sembol_tur_belirle(kod),
-                                "Islem": yon,
-                                "Sembol": kod,
-                                "Adet": adet,
-                                "Fiyat": fiyat,
-                                "Komisyon": kom,
-                                "Toplam": toplam
+                                "Islem": yon, "Sembol": kod, "Adet": adet,
+                                "Fiyat": fiyat, "Komisyon": kom, "Toplam": toplam
                             }
                             with st.spinner("Kaydediliyor..."):
                                 save_transaction(yeni)
@@ -711,7 +667,6 @@ with tab1:
                         st.rerun()
             except:
                 pass
-
     else:
         if df.empty:
             st.info("Henüz işlem kaydı yok.")
@@ -763,14 +718,11 @@ with tab2:
                 v_tur = data["Tur"]
                 risk_kalan = data["NetGiris"]
                 alimlar = data["Alimlar"]
-
                 total_weighted_days = 0
                 for alim in alimlar:
-                    gun_farki = (bugun_tarih - alim["tarih"]).days
-                    gun_farki = max(1, gun_farki)
+                    gun_farki = max(1, (bugun_tarih - alim["tarih"]).days)
                     total_weighted_days += gun_farki * alim["adet"]
                 ort_gun = int(total_weighted_days / net) if net > 0 else 0
-
                 guncel = 0.0
                 ref_fiyat = 0.0
                 if v_tur == "Hisse":
@@ -786,7 +738,6 @@ with tab2:
                         ref_fiyat = guncel
                     else:
                         ref_fiyat = guncel / (1 + (pct / 100))
-
                 deger = net * guncel
                 kz = deger - em
                 kz_yuzde = (kz / em) * 100 if em > 0 else 0
@@ -795,16 +746,12 @@ with tab2:
                 gf_metin = f"{gf_tl:+,.0f} (%{gf_yuzde:+.2f})"
                 gunluk_toplam_tl += gf_tl
                 maliyet_durumu = "BEDAVA" if risk_kalan <= 0 else risk_kalan
-
                 liste.append({
                     "Varlık": sym, "Lot": net,
                     "Ort. Maliyet": (em / net) if net > 0 else 0,
-                    "Fiyat": guncel,
-                    "Kalan Risk (TL)": maliyet_durumu,
-                    "Değer (TL)": float(deger),
-                    "Ort. Süre": f"{ort_gun} Gün",
-                    "K/Z (TL)": float(kz),
-                    "K/Z (%)": float(kz_yuzde),
+                    "Fiyat": guncel, "Kalan Risk (TL)": maliyet_durumu,
+                    "Değer (TL)": float(deger), "Ort. Süre": f"{ort_gun} Gün",
+                    "K/Z (TL)": float(kz), "K/Z (%)": float(kz_yuzde),
                     "Günlük Fark": gf_metin
                 })
 
@@ -825,7 +772,6 @@ with tab2:
                 "Değer (TL)": [toplam_portfoy_degeri, alt_usd, alt_gold],
             })
 
-            # Pasta grafiğine nakit ekle
             pie_df = df_v[["Varlık", "Değer (TL)"]].copy()
             if nakit_bakiye > 0:
                 pie_df = pd.concat([pie_df, pd.DataFrame([{"Varlık": "💵 Nakit", "Değer (TL)": nakit_bakiye}])], ignore_index=True)
@@ -844,10 +790,10 @@ with tab2:
             anlik_ky = (anlik_kz / toplam_maliyet) * 100 if toplam_maliyet > 0 else 0
 
             k0, k1, k2, k3 = st.columns(4)
-            k0.metric("Toplam Servet (Nakit Dahil)", f"{toplam_servet:,.0f} ₺", f"${toplam_servet/dolar:,.0f}", delta_color="off")
+            k0.metric("Toplam Servet", f"{toplam_servet:,.0f} ₺", f"${toplam_servet/dolar:,.0f}", delta_color="off")
             k1.metric("Portföy Değeri", f"{toplam_portfoy_degeri:,.0f} ₺")
             k2.metric("Nakit", f"{nakit_bakiye:,.0f} ₺")
-            k3.metric("Anlık K/Z (Eldeki)", f"{anlik_kz:+,.0f} ₺", f"%{anlik_ky:.1f}")
+            k3.metric("Anlık K/Z", f"{anlik_kz:+,.0f} ₺", f"%{anlik_ky:.1f}")
 
             st.divider()
 
@@ -891,7 +837,6 @@ with tab3:
     df_nakit = get_nakit_data()
     nakit_bakiye = get_nakit_bakiye(df_nakit)
 
-    # Bakiye kartı
     renk_bakiye = "#2ecc71" if nakit_bakiye >= 0 else "#e74c3c"
     st.markdown(f"""
     <div style="background:#1e1e1e;border-radius:12px;padding:20px 28px;display:inline-block;margin-bottom:16px;">
@@ -900,7 +845,7 @@ with tab3:
     </div>
     """, unsafe_allow_html=True)
 
-    col_giris, col_bos = st.columns([2, 1])
+    col_giris, _ = st.columns([2, 1])
     with col_giris:
         with st.form("nakit_form", clear_on_submit=True):
             st.markdown("**Yeni Hareket Ekle**")
@@ -912,12 +857,7 @@ with tab3:
             if st.form_submit_button("EKLE"):
                 if n_tutar > 0:
                     with st.spinner("Kaydediliyor..."):
-                        save_nakit(
-                            n_tarih.strftime("%Y-%m-%d"),
-                            n_aciklama,
-                            n_tutar,
-                            n_tip
-                        )
+                        save_nakit(n_tarih.strftime("%Y-%m-%d"), n_aciklama, n_tutar, n_tip)
                         st.success("Tamam!")
                         st.cache_data.clear()
                         st.rerun()
@@ -927,7 +867,6 @@ with tab3:
     st.divider()
 
     if not df_nakit.empty:
-        # Bakiye gidişat grafiği
         df_nakit_sorted = df_nakit.sort_values("Tarih").copy()
         df_nakit_sorted["NetTutar"] = df_nakit_sorted.apply(
             lambda r: r["Tutar"] if r["Tip"] == "Giriş" else -r["Tutar"], axis=1
@@ -936,12 +875,9 @@ with tab3:
 
         fg = go.Figure()
         fg.add_trace(go.Scatter(
-            x=df_nakit_sorted["Tarih"],
-            y=df_nakit_sorted["Bakiye"],
-            name="Nakit Bakiye",
-            line=dict(color="#f1c40f", width=3),
-            fill="tozeroy",
-            fillcolor="rgba(241,196,15,0.1)"
+            x=df_nakit_sorted["Tarih"], y=df_nakit_sorted["Bakiye"],
+            name="Nakit Bakiye", line=dict(color="#f1c40f", width=3),
+            fill="tozeroy", fillcolor="rgba(241,196,15,0.1)"
         ))
         fg.update_layout(title="Nakit Bakiye Gidişatı", hovermode="x unified", height=300)
         st.plotly_chart(fg, use_container_width=True)
@@ -949,7 +885,6 @@ with tab3:
         st.divider()
         st.subheader("📋 Nakit Hareketleri")
 
-        # Gösterim için tablo
         df_goster = df_nakit_sorted[["Tarih", "Aciklama", "Tip", "Tutar"]].copy()
         df_goster = df_goster.sort_values("Tarih", ascending=False)
         df_goster["Tarih"] = df_goster["Tarih"].dt.strftime("%Y-%m-%d")
@@ -983,26 +918,29 @@ with tab4:
         df_hist["AnlikKar"] = df_hist.apply(
             lambda r: r["ToplamVarlik"] - r["ToplamMaliyet"] if r["ToplamMaliyet"] > 100 else 0, axis=1
         )
-        # Nakit sütunu 0 olan eski satırlar için: o günkü nakiti bilmiyoruz,
-    # grafik bozulmasın diye Nakit=0 olan satırlara güncel bakiyeyi koyma,
-    # sadece gerçekten girilmiş satırları kullan
-    df_hist["ToplamServet"] = df_hist["ToplamVarlik"] + df_hist["Nakit"]
+        df_hist["ToplamServet"] = df_hist["ToplamVarlik"] + df_hist["Nakit"]
 
-    # Nakit verisi olan satırlar için Toplam Servet, olmayanlar için sadece Portföy
-    df_nakit_var = df_hist[df_hist["Nakit"] > 0].copy()
-    f1 = go.Figure()
-    f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"], name="Portföy Değeri", line=dict(color="#3498db", width=2)))
-    if not df_nakit_var.empty:
-        f1.add_trace(go.Scatter(x=df_nakit_var["Tarih"], y=df_nakit_var["ToplamServet"], name="Toplam Servet (Nakit Dahil)", line=dict(color="#2ecc71", width=3)))
-    f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"], name="İçerideki Ana Para", line=dict(color="gray", dash="dot")))
-    f1.update_layout(title="Toplam Servet vs Portföy vs Ana Para", hovermode="x unified")
-    st.plotly_chart(f1, use_container_width=True)
+        # Nakit verisi olan günleri ayır
+        df_nakit_var = df_hist[df_hist["Nakit"] > 0].copy()
+
+        f1 = go.Figure()
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["ToplamVarlik"],
+                                name="Portföy Değeri", line=dict(color="#3498db", width=2)))
+        if not df_nakit_var.empty:
+            f1.add_trace(go.Scatter(x=df_nakit_var["Tarih"], y=df_nakit_var["ToplamServet"],
+                                    name="Toplam Servet (Nakit Dahil)", line=dict(color="#2ecc71", width=3)))
+        f1.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["NetAnaPara"],
+                                name="İçerideki Ana Para", line=dict(color="gray", dash="dot")))
+        f1.update_layout(title="Toplam Servet vs Portföy vs Ana Para", hovermode="x unified")
+        st.plotly_chart(f1, use_container_width=True)
 
         st.divider()
 
         f2 = go.Figure()
-        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"], name="GENEL KÂR (Cepteki Dahil)", line=dict(color="#3498db", width=3)))
-        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"], name="ANLIK KÂR (Sadece Eldekiler)", line=dict(color="#f1c40f", width=2, dash="dash")))
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["GenelKar"],
+                                name="GENEL KÂR (Cepteki Dahil)", line=dict(color="#3498db", width=3)))
+        f2.add_trace(go.Scatter(x=df_hist["Tarih"], y=df_hist["AnlikKar"],
+                                name="ANLIK KÂR (Sadece Eldekiler)", line=dict(color="#f1c40f", width=2, dash="dash")))
         f2.update_layout(title="Kâr Analizi: Genel vs Anlık", hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
     else:
