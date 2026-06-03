@@ -593,7 +593,11 @@ def check_password():
     if "password_correct" not in st.session_state:
         st.text_input("Şifre", type="password", key="pwd", on_change=pwd_entered)
         return False
-    return st.session_state["password_correct"]
+    if not st.session_state["password_correct"]:
+        st.text_input("Şifre", type="password", key="pwd", on_change=pwd_entered)
+        st.error("Şifre hatalı!")
+        return False
+    return True
 
 
 def pwd_entered():
@@ -702,6 +706,8 @@ with tab1:
                         client = init_connection()
                         client.open_by_key(SHEET_ID).worksheet("Islemler").delete_rows(int(secilen))
                         st.success("Silindi!")
+                        st.cache_data.clear()
+                        st.rerun()
                         st.cache_data.clear()
                         st.rerun()
             except:
