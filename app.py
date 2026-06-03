@@ -237,9 +237,12 @@ def save_transaction(veri):
             p_sheet.append_row([veri["Sembol"], 0, 0])
     except:
         pass
-    # Satışta otomatik nakit girişi
-    if veri["Islem"] == "Satış" and float(veri["Toplam"]) > 0:
-        save_nakit(veri["Tarih"], f"{veri['Sembol']} satış geliri", float(veri["Toplam"]), "Giriş")
+    # Satışta otomatik nakit girişi, alışta otomatik nakit çıkışı
+    toplam = float(veri["Toplam"])
+    if veri["Islem"] in ["Satış", "Satis"] and toplam > 0:
+        save_nakit(veri["Tarih"], f"{veri['Sembol']} satış geliri", toplam, "Giriş")
+    elif veri["Islem"] in ["Alış", "Alis"] and toplam > 0:
+        save_nakit(veri["Tarih"], f"{veri['Sembol']} alış ödemesi", toplam, "Çıkış")
 
 
 def get_fund_data_from_sheet():
@@ -459,6 +462,8 @@ def get_usd_rate():
 
 def calculate_portfolio_unified(df):
     portfolio = {}
+    if df.empty or "Tarih" not in df.columns:
+        return {}, 0, 0
     df = df.sort_values("Tarih", kind="mergesort")
     toplam_giren = 0
     toplam_cikan = 0
