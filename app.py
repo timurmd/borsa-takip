@@ -204,6 +204,8 @@ def get_data():
         if len(raw) < 2:
             return pd.DataFrame()
         df = pd.DataFrame(raw[1:], columns=raw[0])
+        # Gerçek Sheets satır numarasını index olarak sakla (header=1, data 2'den başlar)
+        df.index = range(2, len(df) + 2)
         if "Adet" in df.columns:
             df["Adet"] = df["Adet"].apply(safe_adet)
         for c in ["Fiyat", "Komisyon", "Toplam"]:
@@ -698,7 +700,7 @@ with tab1:
                     secilen = st.selectbox("ID:", df_sil.index.sort_values(ascending=False))
                     if st.button("Sil"):
                         client = init_connection()
-                        client.open_by_key(SHEET_ID).worksheet("Islemler").delete_rows(int(secilen) + 2)
+                        client.open_by_key(SHEET_ID).worksheet("Islemler").delete_rows(int(secilen))
                         st.success("Silindi!")
                         st.cache_data.clear()
                         st.rerun()
