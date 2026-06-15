@@ -767,9 +767,13 @@ with tab2:
                         ref_fiyat = guncel
                     else:
                         ref_fiyat = guncel / (1 + (pct / 100))
-                deger = net * guncel
-                kz = deger - em
-                kz_yuzde = (kz / em) * 100 if em > 0 else 0
+                # BEDAVA pozisyonda maliyet sıfır kabul edilir, değerin tamamı kar
+                if risk_kalan <= 0:
+                    kz = deger
+                    kz_yuzde = float('inf')
+                else:
+                    kz = deger - em
+                    kz_yuzde = (kz / em) * 100 if em > 0 else 0
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
                 gf_metin = f"{gf_tl:+,.0f} (%{gf_yuzde:+.2f})"
@@ -837,6 +841,13 @@ with tab2:
                     return f"{val:,.0f}"
                 return val
 
+            def format_kz_pct(val):
+                if val == float('inf'):
+                    return "BEDAVA 🎁"
+                if isinstance(val, (int, float)):
+                    return f"{val:+.2f} %"
+                return val
+
             cfg = {
                 "Varlık": st.column_config.TextColumn("Varlık", disabled=True),
                 "Lot": st.column_config.NumberColumn("Lot", format="%.0f"),
@@ -853,8 +864,11 @@ with tab2:
             st.dataframe(
                 df_v.style.format({
                     "Ort. Maliyet": "{:,.4f}", "Fiyat": "{:,.4f}",
-                    "Değer (TL)": "{:,.0f}", "K/Z (TL)": "{:+,.0f}", "K/Z (%)": "{:+.2f} %"
-                }).format({"Kalan Risk (TL)": format_risk}).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark"]),
+                    "Değer (TL)": "{:,.0f}", "K/Z (TL)": "{:+,.0f}",
+                }).format({
+                    "Kalan Risk (TL)": format_risk,
+                    "K/Z (%)": format_kz_pct
+                }).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark"]),
                 use_container_width=True, hide_index=True, column_config=cfg
             )
 
