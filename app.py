@@ -17,8 +17,7 @@ st.set_page_config(layout="wide", page_title="Portfoy v70")
 SHEET_ID = "1_isL5_B9EiyLppqdP4xML9N4_pLdvgNYIei70H5yiew"
 JSON_FILE = "service_account.json"
 
-# Dönüm noktası — bu tarihteki efektif anapara (Toplam Servet - Genel Kar)
-# Bundan sonra sadece dışarıdan eklenen/çekilen para anaparayı değiştirir.
+# Dönüm noktası — bu tarihteki efektif anapara
 BASLANGIC_ANAPARA = 2_681_425.0
 
 FINTABLES_HEADERS = {
@@ -61,12 +60,12 @@ def safe_adet(val):
 def renk(val):
     c = ""
     if isinstance(val, (int, float)):
-        if val > 0:
+        if val == float('inf') or val > 0:
             c = "#2ecc71"
         elif val < 0:
             c = "#e74c3c"
     elif isinstance(val, str):
-        if val.startswith("+"):
+        if val.startswith("+") or val.startswith("BEDAVA"):
             c = "#2ecc71"
         elif val.startswith("-"):
             c = "#e74c3c"
@@ -159,7 +158,6 @@ def refresh_fund_prices_in_sheet(active_symbols=None):
     return {"updated": updated_count, "failed": failed_count, "total": len(active_symbols)}
 
 
-# --- NAKİT ---
 def get_nakit_data():
     client = init_connection()
     try:
@@ -209,15 +207,16 @@ def get_nakit_bakiye(df_nakit):
 
 
 def get_dis_para_neti(df_nakit):
-    """
-    Dışarıdan eklenen/çekilen net parayı hesaplar.
-    'satış geliri' ve 'alış ödemesi' otomatik kayıtları (iç dönüşüm) hariç tutulur.
-    """
     if df_nakit.empty:
         return 0.0
     dis = df_nakit.copy()
     aciklama = dis["Aciklama"].astype(str).str.lower()
-    ic_donusum = aciklama.str.contains("satış geliri") | aciklama.str.contains("alış ödemesi") | aciklama.str.contains("satis geliri") | aciklama.str.contains("alis odemesi")
+    ic_donusum = (
+        aciklama.str.contains("satış geliri") |
+        aciklama.str.contains("alış ödemesi") |
+        aciklama.str.contains("satis geliri") |
+        aciklama.str.contains("alis odemesi")
+    )
     dis = dis[~ic_donusum]
     if dis.empty:
         return 0.0
@@ -226,7 +225,6 @@ def get_dis_para_neti(df_nakit):
     return girdi - cikti
 
 
-# --- ANA VERİ ---
 def get_data():
     client = init_connection()
     try:
@@ -269,9 +267,9 @@ def save_transaction(veri):
         pass
     toplam = float(veri["Toplam"])
     if veri["Islem"] in ["Satış", "Satis"] and toplam > 0:
-        save_nakit(veri["Tarih"], f"{veri['Sembol']} satış geliri", toplam, "Giriş")
+        save_nakit(veri["Tarih"], f"{veri['Sembol']} satis geliri", toplam, "Giriş")
     elif veri["Islem"] in ["Alış", "Alis"] and toplam > 0:
-        save_nakit(veri["Tarih"], f"{veri['Sembol']} alış ödemesi", toplam, "Çıkış")
+        save_nakit(veri["Tarih"], f"{veri['Sembol']} alis odemesi", toplam, "Çıkış")
 
 
 def get_fund_data_from_sheet():
@@ -313,11 +311,8 @@ def save_daily_snapshot(tv, tm, dk, net_ana, nakit):
     nakit_col = current_header.index("Nakit") + 1
     bugun = datetime.now().strftime("%Y-%m-%d")
     dates = sheet.col_values(1)
-    d = [bugun,
-         str(tv).replace(".", ","),
-         str(tm).replace(".", ","),
-         str(dk).replace(".", ","),
-         str(net_ana).replace(".", ",")]
+    d = [bugun, str(tv).replace(".", ","), str(tm).replace(".", ","),
+         str(dk).replace(".", ","), str(net_ana).replace(".", ",")]
 
     if bugun not in dates:
         sheet.append_row(d + [str(nakit).replace(".", ",")])
@@ -340,7 +335,8 @@ def save_asset_snapshots(liste):
         headers = sheet.row_values(1)
         if not headers:
             headers = ["Tarih"]
-        data_dict = {item["Varlık"]: str(item["K/Z (%)"]).replace(".", ",") for item in liste}
+        data_dict = {item["Varlık"]: str(item["K/Z (%)"]).replace(".", ",") for item in liste
+                     if item["K/Z (%)"] != float('inf')}
         added_header = False
         for sym in data_dict.keys():
             if sym not in headers:
@@ -767,24 +763,28 @@ with tab2:
                         ref_fiyat = guncel
                     else:
                         ref_fiyat = guncel / (1 + (pct / 100))
-                # BEDAVA pozisyonda maliyet sıfır kabul edilir, değerin tamamı kar
-                if risk_kalan <= 0:
-                    kz = deger
-                    kz_yuzde = float('inf')
-                else:
-                    kz = deger - em
-                    kz_yuzde = (kz / em) * 100 if em > 0 else 0
+
+                deger = float(net * guncel)
                 gf_tl = (guncel - ref_fiyat) * net
                 gf_yuzde = ((guncel - ref_fiyat) / ref_fiyat) * 100 if ref_fiyat > 0 else 0
                 gf_metin = f"{gf_tl:+,.0f} (%{gf_yuzde:+.2f})"
                 gunluk_toplam_tl += gf_tl
                 maliyet_durumu = "BEDAVA" if risk_kalan <= 0 else risk_kalan
+
+                # BEDAVA pozisyonda tüm değer kar sayılır
+                if risk_kalan <= 0:
+                    kz = deger
+                    kz_yuzde = float('inf')
+                else:
+                    kz = deger - em
+                    kz_yuzde = (kz / em) * 100 if em > 0 else 0.0
+
                 liste.append({
                     "Varlık": sym, "Lot": net,
                     "Ort. Maliyet": (em / net) if net > 0 else 0,
                     "Fiyat": guncel, "Kalan Risk (TL)": maliyet_durumu,
-                    "Değer (TL)": float(deger), "Ort. Süre": f"{ort_gun} Gün",
-                    "K/Z (TL)": float(kz), "K/Z (%)": float(kz_yuzde),
+                    "Değer (TL)": deger, "Ort. Süre": f"{ort_gun} Gün",
+                    "K/Z (TL)": float(kz), "K/Z (%)": kz_yuzde,
                     "Günlük Fark": gf_metin
                 })
 
@@ -797,7 +797,7 @@ with tab2:
             save_daily_snapshot(toplam_portfoy_degeri, toplam_maliyet, dolar, t_giren - t_cikan, nakit_bakiye)
             save_asset_snapshots(liste)
 
-            # Anapara = dönüm noktası anaparası + sonradan dışarıdan eklenen net para
+            # Anapara = dönüm noktası + sonradan dışarıdan eklenen net para
             dis_para = get_dis_para_neti(df_nakit)
             anapara = BASLANGIC_ANAPARA + dis_para
             genel_kar = toplam_servet - anapara
@@ -846,7 +846,7 @@ with tab2:
                     return "BEDAVA 🎁"
                 if isinstance(val, (int, float)):
                     return f"{val:+.2f} %"
-                return val
+                return str(val)
 
             cfg = {
                 "Varlık": st.column_config.TextColumn("Varlık", disabled=True),
@@ -857,7 +857,7 @@ with tab2:
                 "Değer (TL)": st.column_config.NumberColumn("Değer (TL)", format="%.0f"),
                 "Ort. Süre": st.column_config.TextColumn("Elde Tutma"),
                 "K/Z (TL)": st.column_config.NumberColumn("K/Z (TL)", format="%.0f"),
-                "K/Z (%)": st.column_config.NumberColumn("K/Z (%)", format="%.2f"),
+                "K/Z (%)": st.column_config.TextColumn("K/Z (%)", disabled=True),
                 "Günlük Fark": st.column_config.TextColumn("Günlük", disabled=True)
             }
 
@@ -867,7 +867,7 @@ with tab2:
                     "Değer (TL)": "{:,.0f}", "K/Z (TL)": "{:+,.0f}",
                 }).format({
                     "Kalan Risk (TL)": format_risk,
-                    "K/Z (%)": format_kz_pct
+                    "K/Z (%)": format_kz_pct,
                 }).map(renk, subset=["K/Z (TL)", "K/Z (%)", "Günlük Fark"]),
                 use_container_width=True, hide_index=True, column_config=cfg
             )
